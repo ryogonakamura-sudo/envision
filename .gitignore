@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Personal data — keep your private vocabulary out of git
+vocab-data.local.js
+ExportBlock-*/
+*.csv
+!sample.csv
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+.claude/settings.local.json
+
+# Logs / dependencies
+*.log
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+
+# Local env
+.env
+.env.local
+
+# Generated thumbnails / temp files
+*.tmp

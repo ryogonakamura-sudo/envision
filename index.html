@@ -1,0 +1,1328 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e1014">
+<meta name="description" content="画像から英単語を覚える学習アプリ">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="enVision">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>enVision</title>
+<style>
+  :root {
+    --bg: #0e1014;
+    --bg-elev: #171a21;
+    --bg-elev2: #1f232c;
+    --border: #2a2f3a;
+    --text: #e8eaed;
+    --text-dim: #9aa3b2;
+    --accent: #7c9cff;
+    --ok: #34c77b;
+    --ng: #ff5d6c;
+    --warn: #f5a524;
+    --shadow: 0 10px 30px rgba(0,0,0,0.4);
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  body { min-height: 100dvh; display: flex; flex-direction: column; }
+  button { font-family: inherit; cursor: pointer; }
+  .app { width: 100%; max-width: 720px; margin: 0 auto; padding: 16px; flex: 1; display: flex; flex-direction: column; }
+
+  /* Header */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 4px 16px;
+  }
+  .title { font-size: 20px; font-weight: 700; letter-spacing: 0.02em; }
+  .icon-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center;
+    transition: background .15s;
+  }
+  .icon-btn:hover { background: var(--bg-elev); }
+
+  /* Cards & sections */
+  .card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    box-shadow: var(--shadow);
+  }
+  .stack > * + * { margin-top: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+  .muted { color: var(--text-dim); }
+
+  /* Home */
+  .filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .chip {
+    background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 12px; padding: 12px 14px; font-size: 14px; font-weight: 500;
+    text-align: left; transition: all .15s;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .chip[aria-pressed="true"] {
+    background: rgba(124,156,255,0.12); border-color: var(--accent); color: var(--accent);
+  }
+  .chip .count { color: var(--text-dim); font-size: 12px; font-weight: 400; }
+  .chip[aria-pressed="true"] .count { color: var(--accent); }
+
+  .toggle-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .switch { position: relative; width: 46px; height: 26px; }
+  .switch input { display: none; }
+  .switch-slider {
+    position: absolute; inset: 0; background: var(--bg-elev2); border: 1px solid var(--border);
+    border-radius: 999px; transition: .2s;
+  }
+  .switch-slider::before {
+    content: ""; position: absolute; left: 3px; top: 2px; width: 20px; height: 20px;
+    background: var(--text-dim); border-radius: 50%; transition: .2s;
+  }
+  .switch input:checked + .switch-slider { background: rgba(124,156,255,0.2); border-color: var(--accent); }
+  .switch input:checked + .switch-slider::before { transform: translateX(20px); background: var(--accent); }
+
+  .primary {
+    width: 100%; padding: 16px; font-size: 16px; font-weight: 700;
+    background: var(--accent); color: #0a0d18; border: 0; border-radius: 14px;
+    transition: transform .05s, opacity .15s;
+  }
+  .primary:active { transform: scale(0.98); }
+  .primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .secondary {
+    background: var(--bg-elev2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 12px; padding: 12px 16px; font-size: 14px; font-weight: 500;
+  }
+
+  /* Quiz */
+  .quiz { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+  .progress {
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--text-dim); font-size: 13px;
+  }
+  .progress-bar {
+    flex: 1; height: 4px; background: var(--bg-elev); border-radius: 2px;
+    overflow: hidden; margin: 0 12px;
+  }
+  .progress-fill { height: 100%; background: var(--accent); transition: width .3s; }
+
+  .word-card {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; flex: 1; display: flex; flex-direction: column;
+    min-height: 380px;
+  }
+  .image-area {
+    width: 100%; aspect-ratio: 16/10; background: var(--bg-elev2);
+    display: grid; place-items: center; position: relative; overflow: hidden;
+  }
+  .image-area img { width: 100%; height: 100%; object-fit: cover; }
+  .image-placeholder {
+    width: 100%; height: 100%; display: grid; place-items: center;
+    background: linear-gradient(135deg, #2a2f3a 0%, #1f232c 100%);
+    color: var(--text-dim); font-size: 14px;
+  }
+  .image-loading {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    background: var(--bg-elev2); color: var(--text-dim); font-size: 13px;
+  }
+  .image-credit {
+    position: absolute; bottom: 6px; right: 8px;
+    font-size: 10px; color: rgba(255,255,255,0.7); background: rgba(0,0,0,0.4);
+    padding: 2px 6px; border-radius: 4px; text-decoration: none;
+  }
+  .image-cycle {
+    position: absolute; top: 8px; right: 8px;
+    background: rgba(0,0,0,0.55); color: #fff; border: 0;
+    width: 36px; height: 36px; border-radius: 18px;
+    display: grid; place-items: center; font-size: 16px;
+    backdrop-filter: blur(4px);
+    transition: transform .2s, background .15s;
+  }
+  .image-cycle:hover { background: rgba(0,0,0,0.75); }
+  .image-cycle:active { transform: scale(0.92) rotate(-180deg); }
+  .image-cycle:disabled { opacity: 0.4; cursor: default; }
+  .image-pos {
+    position: absolute; top: 8px; left: 8px;
+    background: rgba(0,0,0,0.55); color: #fff;
+    font-size: 10px; padding: 4px 8px; border-radius: 10px;
+    backdrop-filter: blur(4px);
+  }
+
+  .word-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .english-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .english { font-size: 30px; font-weight: 700; line-height: 1.2; word-break: break-word; flex: 1; min-width: 0; }
+  .speak-btn {
+    background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text);
+    width: 44px; height: 44px; border-radius: 22px; font-size: 20px;
+    display: grid; place-items: center; flex-shrink: 0;
+    transition: transform .1s, background .15s;
+  }
+  .speak-btn:hover { background: var(--border); }
+  .speak-btn:active { transform: scale(0.92); }
+  .speak-btn.speaking { background: rgba(124,156,255,0.2); border-color: var(--accent); color: var(--accent); }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 999px;
+    background: rgba(245,165,36,0.14); color: var(--warn); border: 1px solid rgba(245,165,36,0.3);
+  }
+  .badge.weak { background: rgba(255,93,108,0.14); color: var(--ng); border-color: rgba(255,93,108,0.3); }
+  .reveal-btn {
+    background: var(--bg-elev2); border: 1px dashed var(--border);
+    border-radius: 12px; padding: 18px; color: var(--text-dim);
+    text-align: center; font-size: 14px; width: 100%;
+  }
+  .japanese { font-size: 18px; line-height: 1.6; white-space: pre-wrap; }
+  .note { font-size: 13px; color: var(--text-dim); white-space: pre-wrap; padding-top: 8px; border-top: 1px dashed var(--border); }
+
+  .answer-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+    padding: 12px 16px max(20px, env(safe-area-inset-bottom));
+    position: sticky; bottom: 0;
+    background: linear-gradient(180deg, transparent 0%, var(--bg) 30%);
+  }
+  .ans-btn {
+    min-height: 96px;
+    padding: 18px 12px;
+    font-size: 26px; font-weight: 800;
+    border-radius: 18px; border: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    transition: transform .05s, opacity .15s;
+    line-height: 1;
+  }
+  .ans-btn .ans-emoji { font-size: 38px; line-height: 1; }
+  .ans-btn .ans-label { font-size: 15px; font-weight: 700; opacity: 0.9; }
+  .ans-btn:active { transform: scale(0.97); }
+  .ans-ok { background: rgba(52,199,123,0.18); color: var(--ok); border: 2px solid rgba(52,199,123,0.4); }
+  .ans-ng { background: rgba(255,93,108,0.18); color: var(--ng); border: 2px solid rgba(255,93,108,0.4); }
+  .ans-ok:active { background: rgba(52,199,123,0.32); }
+  .ans-ng:active { background: rgba(255,93,108,0.32); }
+
+  /* Result */
+  .result-stat { display: flex; justify-content: space-around; padding: 24px 0; }
+  .stat { text-align: center; }
+  .stat-num { font-size: 36px; font-weight: 700; }
+  .stat-num.ok { color: var(--ok); }
+  .stat-num.ng { color: var(--ng); }
+  .stat-label { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  /* Settings modal */
+  .modal-back {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: flex-end; justify-content: center; z-index: 100;
+  }
+  .modal-back.open { display: flex; }
+  .modal {
+    background: var(--bg-elev); border-top: 1px solid var(--border);
+    border-radius: 20px 20px 0 0; width: 100%; max-width: 720px;
+    padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom));
+  }
+  .modal h3 { margin: 0 0 4px; font-size: 18px; }
+  .modal .desc { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; }
+  input[type="text"], input[type="password"] {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 12px 14px; border-radius: 10px; font-size: 14px; font-family: inherit;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .help-link { color: var(--accent); text-decoration: none; font-size: 13px; }
+
+  .hidden { display: none !important; }
+
+  /* List */
+  .list-row {
+    background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; display: flex; align-items: center; gap: 12px;
+    transition: background .15s;
+  }
+  .list-row:hover { background: var(--bg-elev2); }
+  .list-row .lr-status {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 14px;
+    display: grid; place-items: center; font-size: 14px;
+    background: var(--bg-elev2); border: 1px solid var(--border);
+  }
+  .list-row .lr-status.ok { background: rgba(52,199,123,0.15); border-color: rgba(52,199,123,0.4); color: var(--ok); }
+  .list-row .lr-status.ng { background: rgba(255,93,108,0.15); border-color: rgba(255,93,108,0.4); color: var(--ng); }
+  .list-row .lr-text { flex: 1; min-width: 0; }
+  .list-row .lr-en { font-weight: 700; font-size: 15px; word-break: break-word; }
+  .list-row .lr-ja { font-size: 12px; color: var(--text-dim); margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-row .lr-meta { display: flex; gap: 4px; flex-shrink: 0; }
+  .list-empty { text-align: center; padding: 32px 12px; color: var(--text-dim); font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="title">📗 enVision</div>
+      <button class="icon-btn" id="btnSettings" aria-label="設定">⚙️</button>
+    </header>
+
+    <!-- Home -->
+    <main id="home" class="stack">
+      <section class="card stack hidden" id="emptyState" style="text-align:center; padding:32px 20px;">
+        <div style="font-size:42px;">📗</div>
+        <div style="font-size:18px; font-weight:700;">enVisionへようこそ</div>
+        <div class="muted" style="font-size:14px; line-height:1.6;">
+          まだ単語がありません。<br>
+          下のボタンから単語を追加するか、<br>
+          CSVファイルを一括インポートしてください。
+        </div>
+        <button class="primary" id="btnEmptyAdd" style="margin-top:8px;">+ 最初の単語を追加</button>
+        <button class="secondary" id="btnEmptyCsv">📥 CSVから一括インポート</button>
+        <div class="muted" style="font-size:11px; padding-top:8px; border-top:1px dashed var(--border);">
+          画像表示には ⚙️ から Unsplash の無料APIキーが必要です
+        </div>
+      </section>
+      <section class="card stack" id="filterSection">
+        <div class="label">フィルタ</div>
+        <div class="filter-grid" id="filterGrid">
+          <button class="chip" data-filter="all" aria-pressed="true">全部 <span class="count" id="cnt-all">-</span></button>
+          <button class="chip" data-filter="unanswered">未回答 <span class="count" id="cnt-unanswered">-</span></button>
+          <button class="chip" data-filter="wrong">❌ のみ <span class="count" id="cnt-wrong">-</span></button>
+          <button class="chip" data-filter="correct">⭕️ のみ <span class="count" id="cnt-correct">-</span></button>
+          <button class="chip" data-filter="weak" style="grid-column: 1 / -1;">🔥 苦手のみ（❌が2回以上） <span class="count" id="cnt-weak">-</span></button>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight:600;">シャッフル</div>
+            <div class="muted" style="font-size:12px;">ランダムな順で出題</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="shuffleToggle" checked>
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight:600;">出題数</div>
+            <div class="muted" style="font-size:12px;">最大 <span id="maxCount">-</span> 件 / 0=全部</div>
+          </div>
+          <input type="text" id="limitInput" inputmode="numeric" placeholder="20" style="width: 80px; text-align:center;">
+        </div>
+      </section>
+
+      <section class="card stack" id="recordSection">
+        <div class="label">これまでの記録</div>
+        <div class="result-stat">
+          <div class="stat"><div class="stat-num ok" id="totalOk">0</div><div class="stat-label">⭕️ 正解</div></div>
+          <div class="stat"><div class="stat-num ng" id="totalNg">0</div><div class="stat-label">❌ 不正解</div></div>
+          <div class="stat"><div class="stat-num" id="totalRound">0</div><div class="stat-label">周回</div></div>
+        </div>
+      </section>
+
+      <button class="primary" id="btnStart">学習を始める</button>
+      <div class="row" style="gap:8px; margin-top:4px;">
+        <button class="secondary" id="btnList" style="flex:1;">📋 単語一覧</button>
+        <button class="secondary" id="btnReset" style="flex:1;">進捗をリセット</button>
+      </div>
+    </main>
+
+    <!-- Vocabulary List -->
+    <main id="list" class="hidden stack">
+      <div class="row" style="gap:8px;">
+        <button class="icon-btn" id="btnListBack" aria-label="戻る">←</button>
+        <input type="text" id="listSearch" placeholder="🔍 単語・日本語・メモで検索" style="flex:1;">
+        <button class="icon-btn" id="btnAddWord" aria-label="単語を追加" title="単語を追加">+</button>
+      </div>
+      <div class="row" style="gap:6px; flex-wrap:wrap;">
+        <button class="chip list-filter" data-listfilter="all" aria-pressed="true">全部 <span class="count" id="lcnt-all">-</span></button>
+        <button class="chip list-filter" data-listfilter="unanswered">未回答 <span class="count" id="lcnt-unanswered">-</span></button>
+        <button class="chip list-filter" data-listfilter="wrong">❌ <span class="count" id="lcnt-wrong">-</span></button>
+        <button class="chip list-filter" data-listfilter="correct">⭕️ <span class="count" id="lcnt-correct">-</span></button>
+        <button class="chip list-filter" data-listfilter="weak">🔥苦手 <span class="count" id="lcnt-weak">-</span></button>
+      </div>
+      <div id="listItems" class="stack" style="gap:6px;"></div>
+    </main>
+
+    <!-- Quiz -->
+    <main id="quiz" class="quiz hidden">
+      <div class="progress">
+        <button class="icon-btn" id="btnBack" aria-label="ホームへ">←</button>
+        <button class="icon-btn" id="btnUndo" aria-label="1つ前に戻る" title="1つ前に戻る" disabled>↶</button>
+        <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
+        <div id="progText">0 / 0</div>
+      </div>
+      <div class="word-card">
+        <div class="image-area" id="imageArea">
+          <div class="image-placeholder" id="imagePlaceholder">画像なし</div>
+        </div>
+        <div class="word-body">
+          <div class="english-row">
+            <div class="english" id="englishWord">-</div>
+            <button class="speak-btn" id="btnSpeak" title="発音を聞く" aria-label="発音を聞く">🔊</button>
+          </div>
+          <div id="badgeRow" class="row" style="gap:6px; flex-wrap:wrap; margin-top:-6px;"></div>
+          <button class="reveal-btn" id="btnReveal">タップで日本語を表示</button>
+          <div id="revealedBox" class="hidden">
+            <div class="japanese" id="japaneseText"></div>
+            <div class="note hidden" id="noteText"></div>
+          </div>
+          <div style="flex:1;"></div>
+        </div>
+      </div>
+      <div class="answer-row">
+        <button class="ans-btn ans-ng" id="btnNg"><span class="ans-emoji">❌</span><span class="ans-label">まだ</span></button>
+        <button class="ans-btn ans-ok" id="btnOk"><span class="ans-emoji">⭕️</span><span class="ans-label">覚えた</span></button>
+      </div>
+    </main>
+
+    <!-- Result -->
+    <main id="result" class="hidden stack">
+      <section class="card stack">
+        <div style="text-align:center; font-size:18px; font-weight:600;">お疲れさまでした 🎉</div>
+        <div class="result-stat">
+          <div class="stat"><div class="stat-num ok" id="resOk">0</div><div class="stat-label">⭕️</div></div>
+          <div class="stat"><div class="stat-num ng" id="resNg">0</div><div class="stat-label">❌</div></div>
+        </div>
+        <button class="primary" id="btnRetryWrong">❌ だけで もう一周</button>
+        <button class="secondary" id="btnHome">ホームへ戻る</button>
+      </section>
+    </main>
+  </div>
+
+  <!-- Word Add/Edit modal -->
+  <div class="modal-back" id="wordModal">
+    <div class="modal stack">
+      <h3 id="wordModalTitle">単語を追加</h3>
+      <div>
+        <div class="label" style="margin-bottom:6px;">英単語 / フレーズ <span style="color:var(--ng);">*</span></div>
+        <input type="text" id="wordEn" placeholder="例: accusation" autocomplete="off">
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px;">日本語訳 <span style="color:var(--ng);">*</span></div>
+        <input type="text" id="wordJa" placeholder="例: 容疑、告発" autocomplete="off">
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px;">メモ（任意）</div>
+        <textarea id="wordNote" rows="3" placeholder="例文・類義語・自分の連想など" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+      <div class="row" style="gap:10px;">
+        <button class="secondary" id="btnWordCancel" style="flex:1;">キャンセル</button>
+        <button class="primary" id="btnWordSave" style="flex:1; padding:12px;">保存</button>
+      </div>
+      <button class="secondary" id="btnWordStudy">▶ この単語だけ学習</button>
+      <button class="secondary" id="btnWordDelete" style="color:var(--ng); border-color:rgba(255,93,108,0.4);">🗑 削除</button>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal-back" id="settingsModal">
+    <div class="modal stack">
+      <h3>設定</h3>
+      <div class="desc">画像はUnsplashで取得します。Access Keyは端末のlocalStorageに保存されます。</div>
+      <div class="label">Unsplash Access Key</div>
+      <input type="password" id="apiKeyInput" placeholder="あなたの Unsplash Access Key">
+      <a class="help-link" href="https://unsplash.com/developers" target="_blank" rel="noopener">→ Unsplashで無料キーを取得（unsplash.com/developers）</a>
+      <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
+        <div class="label">音声</div>
+        <div>
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;">ボイス（⭐は高品質）</div>
+          <select id="voiceSelect" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:13px;"></select>
+          <div class="muted" style="font-size:11px; margin-top:6px;">Macなら システム設定 → アクセシビリティ → 音声 で「Premium/Enhanced」音声を追加できます（より自然な発音）</div>
+        </div>
+        <div class="row" style="gap:12px; align-items:center;">
+          <div style="flex:1;">
+            <div style="font-size:12px; color:var(--text-dim);">速度: <span id="rateLabel">0.95</span>x</div>
+            <input type="range" id="rateSlider" min="0.5" max="1.5" step="0.05" value="0.95" style="width:100%;">
+          </div>
+          <button class="secondary" id="btnTestVoice">▶ 試聴</button>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight:600;">自動で発音を再生</div>
+            <div class="muted" style="font-size:12px;">単語表示時に自動で🔊</div>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="autoSpeakToggle">
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+      </div>
+      <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
+        <div class="label">画像検索</div>
+        <div class="row" style="gap:8px;">
+          <button class="chip" data-imglang="en" style="flex:1; justify-content:center;">英単語で検索</button>
+          <button class="chip" data-imglang="ja" style="flex:1; justify-content:center;">日本語訳で検索</button>
+        </div>
+        <div class="muted" style="font-size:12px;">日本語訳は最初の語のみで検索（例: 「容疑、告発」→「容疑」）。抽象語は日本語の方が当たることがあります。</div>
+      </div>
+      <div class="label" style="margin-top:8px;">バックアップ</div>
+      <div class="row" style="gap:10px;">
+        <button class="secondary" id="btnExport" style="flex:1;">📤 エクスポート</button>
+        <button class="secondary" id="btnImport" style="flex:1;">📥 インポート</button>
+        <input type="file" id="importFile" accept="application/json,.json" style="display:none;">
+      </div>
+      <div class="row" style="gap:10px;">
+        <button class="secondary" id="btnCsvImport" style="flex:1;">📄 CSVから単語を一括追加</button>
+        <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none;">
+      </div>
+      <div class="muted" style="font-size:11px;">CSVのヘッダ例: <code>English,日本語訳,メモ</code> や <code>word,translation,note</code> を自動認識</div>
+      <div class="row" style="margin-top:8px; gap:10px;">
+        <button class="secondary" id="btnCloseSettings" style="flex:1;">閉じる</button>
+        <button class="primary" id="btnSaveSettings" style="flex:1; padding:12px;">保存</button>
+      </div>
+    </div>
+  </div>
+
+<script src="vocab-data.js"></script>
+<script src="vocab-data.local.js" onerror="void 0"></script>
+<script>
+(() => {
+  // ---------- Storage ----------
+  const STORAGE = {
+    apiKey: 'vocabApp.apiKey',
+    progress: 'vocabApp.progress', // { [id]: { latest: 'ok'|'ng'|null, history: [{round, result, at}] } }
+    imageCache: 'vocabApp.imageCache', // { [`${lang}::${word}`]: { results, idx, complete } }
+    round: 'vocabApp.round',
+    autoSpeak: 'vocabApp.autoSpeak',
+    voiceName: 'vocabApp.voiceName',
+    speechRate: 'vocabApp.speechRate',
+    imageLang: 'vocabApp.imageLang', // 'en' | 'ja'
+    userOverrides: 'vocabApp.userOverrides', // { [baseId]: { english?, japanese?, note?, deleted? } }
+    userWords: 'vocabApp.userWords', // [{ id, english, japanese, note }]
+  };
+  const load = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
+  const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+  let progress = load(STORAGE.progress, {});
+  let imageCache = load(STORAGE.imageCache, {});
+  let round = load(STORAGE.round, 0);
+  let apiKey = load(STORAGE.apiKey, '');
+  let autoSpeak = load(STORAGE.autoSpeak, false);
+  let voiceName = load(STORAGE.voiceName, '');
+  let speechRate = load(STORAGE.speechRate, 0.95);
+  let imageLang = load(STORAGE.imageLang, 'en');
+  let userOverrides = load(STORAGE.userOverrides, {});
+  let userWords = load(STORAGE.userWords, []);
+  let voices = [];
+
+  const WEAK_THRESHOLD = 2;
+
+  // Migrate old image cache (no lang prefix) -> en::
+  (function migrateImageCache() {
+    let migrated = false;
+    for (const k of Object.keys(imageCache)) {
+      if (k.includes('::')) continue;
+      imageCache['en::' + k] = imageCache[k];
+      delete imageCache[k];
+      migrated = true;
+    }
+    if (migrated) save(STORAGE.imageCache, imageCache);
+  })();
+
+  const BASE_VOCAB = window.VOCAB_DATA || [];
+  let VOCAB = [];
+  function computeVocab() {
+    VOCAB = [];
+    for (const w of BASE_VOCAB) {
+      const o = userOverrides[w.id];
+      if (o && o.deleted) continue;
+      VOCAB.push(o ? { ...w, ...o } : w);
+    }
+    for (const u of userWords) VOCAB.push(u);
+  }
+  computeVocab();
+
+  // ---------- State ----------
+  let selectedFilter = 'all';
+  let queue = []; // ids to study
+  let cursor = 0;
+  let sessionResults = []; // {id, result}
+  let revealed = false;
+
+  // ---------- Helpers ----------
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => $(id).classList.remove('hidden');
+  const hide = (id) => $(id).classList.add('hidden');
+  const screens = ['home', 'quiz', 'result', 'list'];
+  const goto = (name) => screens.forEach(s => s === name ? show(s) : hide(s));
+
+  function getStatus(id) {
+    return progress[id]?.latest || null;
+  }
+  function getWrongCount(id) {
+    return (progress[id]?.history || []).filter(h => h.result === 'ng').length;
+  }
+  function isWeak(id) {
+    return getWrongCount(id) >= WEAK_THRESHOLD;
+  }
+  function applyFilter(filter) {
+    return VOCAB.filter(w => {
+      const s = getStatus(w.id);
+      if (filter === 'all') return true;
+      if (filter === 'unanswered') return s === null;
+      if (filter === 'wrong') return s === 'ng';
+      if (filter === 'correct') return s === 'ok';
+      if (filter === 'weak') return isWeak(w.id);
+      return true;
+    });
+  }
+  function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  // ---------- Image fetching ----------
+  function cacheKey(word, lang) { return `${lang}::${word}`; }
+
+  function extractPrimaryJp(jp) {
+    if (!jp) return '';
+    const cleaned = jp.replace(/[「」『』"'（）\(\)\[\]【】]/g, ' ');
+    const parts = cleaned.split(/[、,，;；\/／\s]+/).map(s => s.trim()).filter(Boolean);
+    return parts[0] || jp;
+  }
+
+  function buildQuery(word, japanese, lang) {
+    if (lang === 'ja') return extractPrimaryJp(japanese) || word;
+    return word;
+  }
+
+  async function ensureImageCandidates(word, japanese) {
+    const lang = imageLang;
+    const key = cacheKey(word, lang);
+    let entry = imageCache[key];
+    if (entry && entry.results && entry.results.length > 0 && entry.complete) return entry;
+    if (!apiKey) return entry || null;
+    try {
+      const query = buildQuery(word, japanese, lang);
+      const params = new URLSearchParams({
+        query,
+        per_page: '10',
+        orientation: 'landscape',
+        content_filter: 'high',
+      });
+      if (lang === 'ja') params.set('lang', 'ja');
+      const url = `https://api.unsplash.com/search/photos?${params.toString()}`;
+      const res = await fetch(url, { headers: { 'Authorization': `Client-ID ${apiKey}`, 'Accept-Version': 'v1' } });
+      if (!res.ok) {
+        console.warn('Unsplash error', res.status);
+        return null;
+      }
+      const data = await res.json();
+      const photos = data.results || [];
+      if (photos.length === 0) return null;
+      const results = photos.map(p => ({
+        url: p.urls.regular,
+        credit: p.user.name,
+        creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
+      }));
+      entry = { results, idx: 0, complete: true, query };
+      imageCache[key] = entry;
+      save(STORAGE.imageCache, imageCache);
+      return entry;
+    } catch (e) {
+      console.warn('ensureImageCandidates failed', e);
+      return null;
+    }
+  }
+
+  function cycleImage(word) {
+    const key = cacheKey(word, imageLang);
+    const entry = imageCache[key];
+    if (!entry || !entry.results || entry.results.length <= 1) return null;
+    entry.idx = (entry.idx + 1) % entry.results.length;
+    save(STORAGE.imageCache, imageCache);
+    return entry;
+  }
+
+  // ---------- TTS ----------
+  function loadVoices() {
+    if (!('speechSynthesis' in window)) return;
+    voices = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith('en'));
+    voices.sort((a, b) => voiceScore(b) - voiceScore(a));
+    populateVoiceSelect();
+  }
+  function voiceScore(v) {
+    const n = (v.name + ' ' + (v.voiceURI || '')).toLowerCase();
+    let s = 0;
+    if (/premium|enhanced|neural|natural|wavenet|studio/i.test(n)) s += 200;
+    if (/google|microsoft/i.test(n)) s += 60;
+    if (/(^|\s)(ava|allison|samantha|evan|tom|karen|daniel|moira|joanna|matthew|aria|guy|zira)(\s|$|\(|\))/i.test(v.name)) s += 30;
+    if (v.lang === 'en-US') s += 10;
+    if (v.lang === 'en-GB') s += 5;
+    if (v.localService) s += 3;
+    return s;
+  }
+  function populateVoiceSelect() {
+    const sel = $('voiceSelect');
+    if (!sel) return;
+    const current = voiceName || (voices[0] && voices[0].name) || '';
+    sel.innerHTML = '';
+    voices.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.name;
+      const tag = /premium|enhanced|neural|natural|wavenet|studio/i.test(v.name + (v.voiceURI || '')) ? ' ⭐' : '';
+      opt.textContent = `${v.name} (${v.lang})${tag}`;
+      if (v.name === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    if (!voiceName && voices[0]) voiceName = voices[0].name;
+  }
+  function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      const v = voices.find(x => x.name === voiceName) || voices[0];
+      if (v) { u.voice = v; u.lang = v.lang; }
+      else { u.lang = 'en-US'; }
+      u.rate = Number(speechRate) || 0.95;
+      const btn = $('btnSpeak');
+      if (btn) btn.classList.add('speaking');
+      u.onend = () => { if (btn) btn.classList.remove('speaking'); };
+      u.onerror = () => { if (btn) btn.classList.remove('speaking'); };
+      window.speechSynthesis.speak(u);
+    } catch (e) { console.warn('speak failed', e); }
+  }
+
+  // ---------- Render: Home ----------
+  function renderHome() {
+    const isEmpty = VOCAB.length === 0;
+    $('emptyState').classList.toggle('hidden', !isEmpty);
+    $('filterSection').classList.toggle('hidden', isEmpty);
+    $('recordSection').classList.toggle('hidden', isEmpty);
+    $('btnStart').classList.toggle('hidden', isEmpty);
+
+    const counts = { all: VOCAB.length, unanswered: 0, wrong: 0, correct: 0, weak: 0 };
+    for (const w of VOCAB) {
+      const s = getStatus(w.id);
+      if (s === null) counts.unanswered++;
+      else if (s === 'ng') counts.wrong++;
+      else if (s === 'ok') counts.correct++;
+      if (isWeak(w.id)) counts.weak++;
+    }
+    $('cnt-all').textContent = counts.all;
+    $('cnt-unanswered').textContent = counts.unanswered;
+    $('cnt-wrong').textContent = counts.wrong;
+    $('cnt-correct').textContent = counts.correct;
+    $('cnt-weak').textContent = counts.weak;
+
+    document.querySelectorAll('.chip').forEach(c => {
+      c.setAttribute('aria-pressed', c.dataset.filter === selectedFilter ? 'true' : 'false');
+    });
+
+    const filtered = applyFilter(selectedFilter);
+    $('maxCount').textContent = filtered.length;
+    $('btnStart').disabled = filtered.length === 0;
+
+    let okTotal = 0, ngTotal = 0;
+    for (const id in progress) {
+      const p = progress[id];
+      if (p.latest === 'ok') okTotal++;
+      if (p.latest === 'ng') ngTotal++;
+    }
+    $('totalOk').textContent = okTotal;
+    $('totalNg').textContent = ngTotal;
+    $('totalRound').textContent = round;
+  }
+
+  // ---------- Render: Quiz ----------
+  async function renderCard() {
+    revealed = false;
+    hide('revealedBox');
+    show('btnReveal');
+    const w = VOCAB.find(v => v.id === queue[cursor]);
+    if (!w) return;
+
+    $('englishWord').textContent = w.english;
+    $('japaneseText').textContent = w.japanese;
+    if (w.note) { $('noteText').textContent = w.note; $('noteText').classList.remove('hidden'); }
+    else $('noteText').classList.add('hidden');
+
+    // Badges
+    const badgeRow = $('badgeRow');
+    badgeRow.innerHTML = '';
+    const wrong = getWrongCount(w.id);
+    if (isWeak(w.id)) {
+      const b = document.createElement('span');
+      b.className = 'badge weak';
+      b.textContent = `🔥 苦手 ❌${wrong}回`;
+      badgeRow.appendChild(b);
+    } else if (wrong > 0) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = `❌${wrong}回`;
+      badgeRow.appendChild(b);
+    }
+
+    if (autoSpeak) setTimeout(() => speak(w.english), 250);
+
+    $('progText').textContent = `${cursor + 1} / ${queue.length}`;
+    $('progFill').style.width = `${((cursor) / queue.length) * 100}%`;
+    $('btnUndo').disabled = cursor === 0 || sessionResults.length === 0;
+
+    // Image
+    const area = $('imageArea');
+    area.innerHTML = '<div class="image-loading">画像を読み込み中…</div>';
+    const entry = await ensureImageCandidates(w.english, w.japanese);
+    paintImage(area, w.english, entry);
+  }
+
+  function paintImage(area, word, entry) {
+    if (!entry || !entry.results || entry.results.length === 0) {
+      area.innerHTML = `<div class="image-placeholder">${apiKey ? '画像が見つかりませんでした' : '⚙️ から Unsplash キーを設定すると画像が表示されます'}</div>`;
+      return;
+    }
+    const img = entry.results[entry.idx];
+    area.innerHTML = '';
+    const el = document.createElement('img');
+    el.src = img.url;
+    el.alt = word;
+    el.loading = 'eager';
+    area.appendChild(el);
+
+    if (entry.results.length > 1) {
+      const pos = document.createElement('div');
+      pos.className = 'image-pos';
+      pos.textContent = `${entry.idx + 1} / ${entry.results.length}`;
+      area.appendChild(pos);
+
+      const cyc = document.createElement('button');
+      cyc.className = 'image-cycle';
+      cyc.title = '別の画像にする';
+      cyc.textContent = '🔄';
+      cyc.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = cycleImage(word);
+        if (next) paintImage(area, word, next);
+      });
+      area.appendChild(cyc);
+    }
+
+    if (img.credit) {
+      const a = document.createElement('a');
+      a.className = 'image-credit';
+      a.href = img.creditUrl || '#';
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = `📷 ${img.credit}`;
+      area.appendChild(a);
+    }
+  }
+
+  function reveal() {
+    if (revealed) return;
+    revealed = true;
+    hide('btnReveal');
+    show('revealedBox');
+  }
+
+  function answer(result) {
+    const id = queue[cursor];
+    if (!progress[id]) progress[id] = { latest: null, history: [] };
+    progress[id].latest = result;
+    progress[id].history.push({ round, result, at: Date.now() });
+    save(STORAGE.progress, progress);
+    sessionResults.push({ id, result });
+    cursor++;
+    if (cursor >= queue.length) {
+      finishRound();
+    } else {
+      renderCard();
+    }
+  }
+
+  function undoLast() {
+    if (cursor === 0 || sessionResults.length === 0) return;
+    const last = sessionResults.pop();
+    const p = progress[last.id];
+    if (p && p.history && p.history.length > 0) {
+      p.history.pop();
+      const prev = p.history.length > 0 ? p.history[p.history.length - 1] : null;
+      p.latest = prev ? prev.result : null;
+      save(STORAGE.progress, progress);
+    }
+    cursor--;
+    renderCard();
+  }
+
+  function finishRound() {
+    round++;
+    save(STORAGE.round, round);
+    const ok = sessionResults.filter(r => r.result === 'ok').length;
+    const ng = sessionResults.filter(r => r.result === 'ng').length;
+    $('resOk').textContent = ok;
+    $('resNg').textContent = ng;
+    $('btnRetryWrong').disabled = ng === 0;
+    goto('result');
+  }
+
+  // ---------- Render: List ----------
+  let listFilter = 'all';
+  let listSearchTerm = '';
+
+  function renderList() {
+    const counts = { all: VOCAB.length, unanswered: 0, wrong: 0, correct: 0, weak: 0 };
+    for (const w of VOCAB) {
+      const s = getStatus(w.id);
+      if (s === null) counts.unanswered++;
+      else if (s === 'ng') counts.wrong++;
+      else if (s === 'ok') counts.correct++;
+      if (isWeak(w.id)) counts.weak++;
+    }
+    $('lcnt-all').textContent = counts.all;
+    $('lcnt-unanswered').textContent = counts.unanswered;
+    $('lcnt-wrong').textContent = counts.wrong;
+    $('lcnt-correct').textContent = counts.correct;
+    $('lcnt-weak').textContent = counts.weak;
+    document.querySelectorAll('.list-filter').forEach(c => {
+      c.setAttribute('aria-pressed', c.dataset.listfilter === listFilter ? 'true' : 'false');
+    });
+
+    const q = listSearchTerm.trim().toLowerCase();
+    const filtered = VOCAB.filter(w => {
+      const s = getStatus(w.id);
+      if (listFilter === 'unanswered' && s !== null) return false;
+      if (listFilter === 'wrong' && s !== 'ng') return false;
+      if (listFilter === 'correct' && s !== 'ok') return false;
+      if (listFilter === 'weak' && !isWeak(w.id)) return false;
+      if (q) {
+        const hay = (w.english + ' ' + w.japanese + ' ' + (w.note || '')).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const container = $('listItems');
+    container.innerHTML = '';
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'list-empty';
+      empty.textContent = '該当する単語がありません';
+      container.appendChild(empty);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const w of filtered.slice(0, 200)) {
+      const s = getStatus(w.id);
+      const wc = getWrongCount(w.id);
+      const row = document.createElement('div');
+      row.className = 'list-row';
+      const statusIcon = s === 'ok' ? '⭕' : s === 'ng' ? '✕' : '・';
+      const statusCls = s === 'ok' ? 'ok' : s === 'ng' ? 'ng' : '';
+      row.innerHTML = `
+        <div class="lr-status ${statusCls}">${statusIcon}</div>
+        <div class="lr-text">
+          <div class="lr-en"></div>
+          <div class="lr-ja"></div>
+        </div>
+        <div class="lr-meta"></div>
+      `;
+      row.querySelector('.lr-en').textContent = w.english;
+      row.querySelector('.lr-ja').textContent = w.japanese;
+      const meta = row.querySelector('.lr-meta');
+      if (isWeak(w.id)) {
+        const b = document.createElement('span');
+        b.className = 'badge weak';
+        b.textContent = `🔥${wc}`;
+        meta.appendChild(b);
+      } else if (wc > 0) {
+        const b = document.createElement('span');
+        b.className = 'badge';
+        b.textContent = `${wc}`;
+        meta.appendChild(b);
+      }
+      row.addEventListener('click', () => openWordModal(w.id));
+      frag.appendChild(row);
+    }
+    container.appendChild(frag);
+    if (filtered.length > 200) {
+      const more = document.createElement('div');
+      more.className = 'list-empty';
+      more.textContent = `… 他 ${filtered.length - 200} 件（検索で絞り込んでください）`;
+      container.appendChild(more);
+    }
+  }
+
+  // ---------- CSV import ----------
+  function parseCSV(text) {
+    text = text.replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { row.push(field); field = ''; }
+        else if (c === '\n' || c === '\r') {
+          if (c === '\r' && text[i + 1] === '\n') i++;
+          row.push(field); field = '';
+          if (row.some(f => f.length > 0)) rows.push(row);
+          row = [];
+        } else field += c;
+      }
+    }
+    if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+    return rows;
+  }
+  function findColumn(headers, candidates) {
+    for (let i = 0; i < headers.length; i++) {
+      const h = headers[i].trim().toLowerCase();
+      if (candidates.some(c => h === c.toLowerCase() || h.includes(c.toLowerCase()))) return i;
+    }
+    return -1;
+  }
+  async function importCSV(file) {
+    const text = await file.text();
+    const rows = parseCSV(text);
+    if (rows.length < 2) { alert('CSVが空、または1行しかありません'); return; }
+    const headers = rows[0];
+    const enIdx = findColumn(headers, ['english', '英単語', '単語', 'word', 'term']);
+    const jaIdx = findColumn(headers, ['日本語訳', '日本語', '訳', 'japanese', 'translation', 'meaning']);
+    const noteIdx = findColumn(headers, ['メモ', 'note', 'memo', 'comment']);
+    if (enIdx < 0 || jaIdx < 0) {
+      alert('「英単語」と「日本語訳」に相当する列が見つかりません。\nヘッダ行を確認してください。\n見つかった列: ' + headers.join(', '));
+      return;
+    }
+    let added = 0, skipped = 0;
+    const existingEn = new Set(VOCAB.map(w => w.english.toLowerCase()));
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const en = (r[enIdx] || '').trim();
+      const ja = (r[jaIdx] || '').trim();
+      const note = noteIdx >= 0 ? (r[noteIdx] || '').trim() : '';
+      if (!en || !ja) { skipped++; continue; }
+      if (existingEn.has(en.toLowerCase())) { skipped++; continue; }
+      const id = 'u_' + Date.now().toString(36) + '_' + i.toString(36) + Math.random().toString(36).slice(2, 5);
+      userWords.push({ id, english: en, japanese: ja, note,
+        notionCheck1: false, notionCheck2: false, notionCheck3: false });
+      existingEn.add(en.toLowerCase());
+      added++;
+    }
+    save(STORAGE.userWords, userWords);
+    computeVocab();
+    renderHome();
+    if (!$('list').classList.contains('hidden')) renderList();
+    alert(`インポート完了: ${added} 件追加 / ${skipped} 件スキップ（重複・空欄）`);
+  }
+
+  // ---------- Word add/edit ----------
+  let editingId = null;
+
+  function openWordModal(id) {
+    editingId = id;
+    const isEdit = !!id;
+    $('wordModalTitle').textContent = isEdit ? '単語を編集' : '単語を追加';
+    if (isEdit) {
+      const w = VOCAB.find(v => v.id === id);
+      if (!w) return;
+      $('wordEn').value = w.english;
+      $('wordJa').value = w.japanese;
+      $('wordNote').value = w.note || '';
+      $('btnWordDelete').style.display = '';
+      $('btnWordStudy').style.display = '';
+    } else {
+      $('wordEn').value = '';
+      $('wordJa').value = '';
+      $('wordNote').value = '';
+      $('btnWordDelete').style.display = 'none';
+      $('btnWordStudy').style.display = 'none';
+    }
+    $('wordModal').classList.add('open');
+    setTimeout(() => $('wordEn').focus(), 50);
+  }
+
+  function closeWordModal() {
+    $('wordModal').classList.remove('open');
+    editingId = null;
+  }
+
+  function saveWord() {
+    const en = $('wordEn').value.trim();
+    const ja = $('wordJa').value.trim();
+    const note = $('wordNote').value.trim();
+    if (!en || !ja) { alert('英単語と日本語訳は必須です'); return; }
+    if (editingId) {
+      if (editingId.startsWith('u_')) {
+        const idx = userWords.findIndex(u => u.id === editingId);
+        if (idx >= 0) {
+          userWords[idx] = { ...userWords[idx], english: en, japanese: ja, note };
+          save(STORAGE.userWords, userWords);
+        }
+      } else {
+        userOverrides[editingId] = {
+          ...(userOverrides[editingId] || {}),
+          english: en, japanese: ja, note,
+          deleted: false,
+        };
+        save(STORAGE.userOverrides, userOverrides);
+      }
+    } else {
+      const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      userWords.push({ id, english: en, japanese: ja, note,
+        notionCheck1: false, notionCheck2: false, notionCheck3: false });
+      save(STORAGE.userWords, userWords);
+    }
+    computeVocab();
+    closeWordModal();
+    if (!$('list').classList.contains('hidden')) renderList();
+    renderHome();
+  }
+
+  function deleteWord() {
+    if (!editingId) return;
+    if (!confirm('この単語を削除しますか？\n（進捗履歴も合わせて消去します）')) return;
+    if (editingId.startsWith('u_')) {
+      userWords = userWords.filter(u => u.id !== editingId);
+      save(STORAGE.userWords, userWords);
+    } else {
+      userOverrides[editingId] = { ...(userOverrides[editingId] || {}), deleted: true };
+      save(STORAGE.userOverrides, userOverrides);
+    }
+    if (progress[editingId]) {
+      delete progress[editingId];
+      save(STORAGE.progress, progress);
+    }
+    computeVocab();
+    closeWordModal();
+    if (!$('list').classList.contains('hidden')) renderList();
+    renderHome();
+  }
+
+  // ---------- Quiz start ----------
+  function startSession(ids) {
+    queue = ids.slice();
+    cursor = 0;
+    sessionResults = [];
+    goto('quiz');
+    renderCard();
+  }
+
+  function startFromFilter() {
+    let pool = applyFilter(selectedFilter);
+    if ($('shuffleToggle').checked) pool = shuffle(pool);
+    const lim = parseInt($('limitInput').value || '0', 10);
+    if (lim > 0) pool = pool.slice(0, lim);
+    if (pool.length === 0) return;
+    startSession(pool.map(w => w.id));
+  }
+
+  // ---------- Events ----------
+  document.querySelectorAll('.chip').forEach(c => {
+    c.addEventListener('click', () => {
+      selectedFilter = c.dataset.filter;
+      renderHome();
+    });
+  });
+
+  $('btnStart').addEventListener('click', startFromFilter);
+
+  $('btnBack').addEventListener('click', () => {
+    if (confirm('途中ですが終了しますか？\n（ここまでの回答は保存されます）')) {
+      goto('home'); renderHome();
+    }
+  });
+  $('btnUndo').addEventListener('click', undoLast);
+
+  $('btnReveal').addEventListener('click', reveal);
+  $('imageArea').addEventListener('click', reveal);
+  $('englishWord').addEventListener('click', reveal);
+  $('btnSpeak').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const w = VOCAB.find(v => v.id === queue[cursor]);
+    if (w) speak(w.english);
+  });
+
+  $('btnOk').addEventListener('click', () => { if (!revealed) reveal(); else answer('ok'); });
+  $('btnNg').addEventListener('click', () => { if (!revealed) reveal(); else answer('ng'); });
+
+  $('btnRetryWrong').addEventListener('click', () => {
+    const ids = sessionResults.filter(r => r.result === 'ng').map(r => r.id);
+    if (ids.length === 0) return;
+    let pool = ids;
+    if ($('shuffleToggle').checked) pool = shuffle(pool);
+    startSession(pool);
+  });
+  $('btnHome').addEventListener('click', () => { goto('home'); renderHome(); });
+
+  $('btnList').addEventListener('click', () => {
+    listSearchTerm = '';
+    $('listSearch').value = '';
+    renderList();
+    goto('list');
+  });
+  $('btnListBack').addEventListener('click', () => { goto('home'); renderHome(); });
+  $('btnAddWord').addEventListener('click', () => openWordModal(null));
+  $('btnEmptyAdd').addEventListener('click', () => openWordModal(null));
+  $('btnEmptyCsv').addEventListener('click', () => $('csvFile').click());
+  $('btnCsvImport').addEventListener('click', () => $('csvFile').click());
+  $('csvFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try { await importCSV(file); }
+    catch (err) { alert('CSVインポート失敗: ' + err.message); }
+    finally { e.target.value = ''; $('settingsModal').classList.remove('open'); }
+  });
+
+  // Word modal
+  $('btnWordCancel').addEventListener('click', closeWordModal);
+  $('btnWordSave').addEventListener('click', saveWord);
+  $('btnWordDelete').addEventListener('click', deleteWord);
+  $('btnWordStudy').addEventListener('click', () => {
+    const id = editingId;
+    closeWordModal();
+    if (id) startSession([id]);
+  });
+  $('wordModal').addEventListener('click', (e) => {
+    if (e.target.id === 'wordModal') closeWordModal();
+  });
+  ['wordEn', 'wordJa'].forEach(id => {
+    $(id).addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveWord(); }
+    });
+  });
+  $('listSearch').addEventListener('input', (e) => {
+    listSearchTerm = e.target.value;
+    renderList();
+  });
+  document.querySelectorAll('.list-filter').forEach(c => {
+    c.addEventListener('click', () => {
+      listFilter = c.dataset.listfilter;
+      renderList();
+    });
+  });
+
+  $('btnReset').addEventListener('click', () => {
+    if (!confirm('すべての ⭕️/❌ 記録と周回数をリセットします。よろしいですか？')) return;
+    progress = {};
+    round = 0;
+    save(STORAGE.progress, progress);
+    save(STORAGE.round, round);
+    renderHome();
+  });
+
+  // Settings
+  function refreshImgLangChips() {
+    document.querySelectorAll('[data-imglang]').forEach(c => {
+      c.setAttribute('aria-pressed', c.dataset.imglang === imageLang ? 'true' : 'false');
+    });
+  }
+  $('btnSettings').addEventListener('click', () => {
+    $('apiKeyInput').value = apiKey;
+    $('autoSpeakToggle').checked = autoSpeak;
+    $('rateSlider').value = speechRate;
+    $('rateLabel').textContent = Number(speechRate).toFixed(2);
+    populateVoiceSelect();
+    refreshImgLangChips();
+    $('settingsModal').classList.add('open');
+  });
+  $('btnCloseSettings').addEventListener('click', () => $('settingsModal').classList.remove('open'));
+  $('btnSaveSettings').addEventListener('click', () => {
+    apiKey = $('apiKeyInput').value.trim();
+    autoSpeak = $('autoSpeakToggle').checked;
+    voiceName = $('voiceSelect').value || voiceName;
+    speechRate = parseFloat($('rateSlider').value) || 0.95;
+    save(STORAGE.apiKey, apiKey);
+    save(STORAGE.autoSpeak, autoSpeak);
+    save(STORAGE.voiceName, voiceName);
+    save(STORAGE.speechRate, speechRate);
+    save(STORAGE.imageLang, imageLang);
+    $('settingsModal').classList.remove('open');
+  });
+  $('rateSlider').addEventListener('input', (e) => {
+    $('rateLabel').textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  $('btnTestVoice').addEventListener('click', () => {
+    voiceName = $('voiceSelect').value || voiceName;
+    speechRate = parseFloat($('rateSlider').value) || 0.95;
+    speak('Hello, this is a sample of my voice.');
+  });
+  document.querySelectorAll('[data-imglang]').forEach(c => {
+    c.addEventListener('click', () => {
+      imageLang = c.dataset.imglang;
+      refreshImgLangChips();
+    });
+  });
+
+  // Export
+  $('btnExport').addEventListener('click', () => {
+    const dump = {
+      _app: 'enVision',
+      _version: 2,
+      exportedAt: new Date().toISOString(),
+      progress, imageCache, round, userOverrides, userWords,
+    };
+    const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    a.href = URL.createObjectURL(blob);
+    a.download = `vocabapp-backup-${ts}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // Import
+  $('btnImport').addEventListener('click', () => $('importFile').click());
+  $('importFile').addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (data._app !== 'enVision' && data._app !== 'VocabApp') throw new Error('enVisionのバックアップではありません');
+      if (!confirm('現在の進捗を上書きします。よろしいですか？')) return;
+      if (data.progress) { progress = data.progress; save(STORAGE.progress, progress); }
+      if (data.imageCache) { imageCache = data.imageCache; save(STORAGE.imageCache, imageCache); }
+      if (typeof data.round === 'number') { round = data.round; save(STORAGE.round, round); }
+      if (data.userOverrides) { userOverrides = data.userOverrides; save(STORAGE.userOverrides, userOverrides); }
+      if (Array.isArray(data.userWords)) { userWords = data.userWords; save(STORAGE.userWords, userWords); }
+      computeVocab();
+      renderHome();
+      alert('インポート完了');
+    } catch (err) {
+      alert('インポート失敗: ' + err.message);
+    } finally {
+      e.target.value = '';
+    }
+  });
+  $('settingsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'settingsModal') $('settingsModal').classList.remove('open');
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if ($('quiz').classList.contains('hidden')) return;
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); reveal(); }
+    if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'o') { if (revealed) answer('ok'); }
+    if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'x') { if (revealed) answer('ng'); }
+    if (e.key.toLowerCase() === 'u' || e.key === 'Backspace') { undoLast(); }
+  });
+
+  // Init
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW registration failed', err));
+    });
+  }
+  if ('speechSynthesis' in window) {
+    loadVoices();
+    if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }
+  renderHome();
+  goto('home');
+})();
+</script>
+</body>
+</html>
