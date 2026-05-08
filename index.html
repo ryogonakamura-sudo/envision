@@ -226,6 +226,7 @@
     background: var(--bg-elev); border-top: 1px solid var(--border);
     border-radius: 20px 20px 0 0; width: 100%; max-width: 720px;
     padding: 20px; padding-bottom: max(20px, env(safe-area-inset-bottom));
+    max-height: 92vh; overflow-y: auto;
   }
   .modal h3 { margin: 0 0 4px; font-size: 18px; }
   .modal .desc { font-size: 13px; color: var(--text-dim); margin-bottom: 16px; }
@@ -419,7 +420,25 @@
   <div class="modal-back" id="settingsModal">
     <div class="modal stack">
       <h3>設定</h3>
-      <div class="desc">画像はUnsplashで取得します。Access Keyは端末のlocalStorageに保存されます。</div>
+      <div class="stack" style="padding-bottom:12px; border-bottom:1px solid var(--border);">
+        <div class="label">アカウント</div>
+        <div id="authSignedOut" class="stack" style="gap:8px;">
+          <div class="muted" style="font-size:12px;">Googleでログインすると、複数端末で進捗・追加した単語を同期できます。</div>
+          <button class="primary" id="btnSignIn" style="padding:12px;">🔵 Googleでログイン</button>
+        </div>
+        <div id="authSignedIn" class="stack hidden" style="gap:8px;">
+          <div class="row" style="gap:10px; align-items:center;">
+            <img id="authAvatar" alt="" style="width:36px; height:36px; border-radius:18px; background:var(--bg-elev2);">
+            <div style="flex:1; min-width:0;">
+              <div id="authName" style="font-size:14px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">-</div>
+              <div id="authEmail" class="muted" style="font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">-</div>
+            </div>
+          </div>
+          <div id="syncStatus" class="muted" style="font-size:11px;">-</div>
+          <button class="secondary" id="btnSignOut">ログアウト</button>
+        </div>
+      </div>
+      <div class="desc">画像はUnsplashで取得します。Access Keyは端末のlocalStorageに保存されます（クラウドには同期されません）。</div>
       <div class="label">Unsplash Access Key</div>
       <input type="password" id="apiKeyInput" placeholder="あなたの Unsplash Access Key">
       <a class="help-link" href="https://unsplash.com/developers" target="_blank" rel="noopener">→ Unsplashで無料キーを取得（unsplash.com/developers）</a>
@@ -476,6 +495,10 @@
 
 <script src="vocab-data.js"></script>
 <script src="vocab-data.local.js" onerror="void 0"></script>
+<script src="firebase-config.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
 <script>
 (() => {
   // ---------- Storage ----------
@@ -492,7 +515,15 @@
     userWords: 'vocabApp.userWords', // [{ id, english, japanese, note }]
   };
   const load = (k, fb) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } };
-  const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+  const SYNCABLE_KEYS = new Set([
+    'vocabApp.progress', 'vocabApp.userOverrides', 'vocabApp.userWords',
+    'vocabApp.round', 'vocabApp.autoSpeak', 'vocabApp.voiceName',
+    'vocabApp.speechRate', 'vocabApp.imageLang',
+  ]);
+  const save = (k, v) => {
+    localStorage.setItem(k, JSON.stringify(v));
+    if (SYNCABLE_KEYS.has(k)) scheduleCloudSync();
+  };
 
   let progress = load(STORAGE.progress, {});
   let imageCache = load(STORAGE.imageCache, {});
@@ -1307,6 +1338,125 @@
     if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'x') { if (revealed) answer('ng'); }
     if (e.key.toLowerCase() === 'u' || e.key === 'Backspace') { undoLast(); }
   });
+
+  // ---------- Firebase auth + cloud sync ----------
+  let firebaseApp = null, firebaseAuth = null, firebaseDb = null, currentUser = null;
+  let syncTimer = null, syncing = false;
+
+  function setSyncStatus(text) {
+    const el = $('syncStatus');
+    if (el) el.textContent = text;
+  }
+
+  function scheduleCloudSync() {
+    if (!currentUser || !firebaseDb) return;
+    if (syncTimer) clearTimeout(syncTimer);
+    setSyncStatus('変更を同期予定…');
+    syncTimer = setTimeout(() => pushToCloud().catch(e => {
+      console.warn('Sync error', e);
+      setSyncStatus('⚠️ 同期失敗: ' + (e.message || e));
+    }), 1500);
+  }
+
+  async function pushToCloud() {
+    if (!currentUser || !firebaseDb || syncing) return;
+    syncing = true;
+    setSyncStatus('同期中…');
+    try {
+      const docRef = firebaseDb.collection('users').doc(currentUser.uid);
+      await docRef.set({
+        progress, userOverrides, userWords, round,
+        autoSpeak, voiceName, speechRate, imageLang,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: false });
+      setSyncStatus('✓ 同期済 ' + new Date().toLocaleTimeString('ja-JP'));
+    } finally {
+      syncing = false;
+    }
+  }
+
+  async function pullFromCloud() {
+    if (!currentUser || !firebaseDb) return null;
+    const docRef = firebaseDb.collection('users').doc(currentUser.uid);
+    const snap = await docRef.get();
+    return snap.exists ? snap.data() : null;
+  }
+
+  function applyCloudData(data) {
+    if (!data) return;
+    if (data.progress) { progress = data.progress; localStorage.setItem(STORAGE.progress, JSON.stringify(progress)); }
+    if (data.userOverrides) { userOverrides = data.userOverrides; localStorage.setItem(STORAGE.userOverrides, JSON.stringify(userOverrides)); }
+    if (Array.isArray(data.userWords)) { userWords = data.userWords; localStorage.setItem(STORAGE.userWords, JSON.stringify(userWords)); }
+    if (typeof data.round === 'number') { round = data.round; localStorage.setItem(STORAGE.round, JSON.stringify(round)); }
+    if (typeof data.autoSpeak === 'boolean') { autoSpeak = data.autoSpeak; localStorage.setItem(STORAGE.autoSpeak, JSON.stringify(autoSpeak)); }
+    if (data.voiceName) { voiceName = data.voiceName; localStorage.setItem(STORAGE.voiceName, JSON.stringify(voiceName)); }
+    if (typeof data.speechRate === 'number') { speechRate = data.speechRate; localStorage.setItem(STORAGE.speechRate, JSON.stringify(speechRate)); }
+    if (data.imageLang) { imageLang = data.imageLang; localStorage.setItem(STORAGE.imageLang, JSON.stringify(imageLang)); }
+    computeVocab();
+  }
+
+  function hasLocalData() {
+    return Object.keys(progress).length > 0 || userWords.length > 0 || Object.keys(userOverrides).length > 0;
+  }
+
+  async function onSignedIn(user) {
+    currentUser = user;
+    $('authSignedOut').classList.add('hidden');
+    $('authSignedIn').classList.remove('hidden');
+    $('authName').textContent = user.displayName || '(名前なし)';
+    $('authEmail').textContent = user.email || '';
+    if (user.photoURL) $('authAvatar').src = user.photoURL;
+    setSyncStatus('クラウドからデータを取得中…');
+    try {
+      const cloud = await pullFromCloud();
+      if (cloud) {
+        if (hasLocalData() && confirm('クラウドにデータがあります。\n「OK」: クラウドのデータで上書き\n「キャンセル」: ローカルのデータでクラウドを上書き')) {
+          applyCloudData(cloud);
+        } else if (!hasLocalData()) {
+          applyCloudData(cloud);
+        } else {
+          await pushToCloud();
+        }
+      } else {
+        await pushToCloud();
+      }
+      renderHome();
+      if (!$('list').classList.contains('hidden')) renderList();
+      setSyncStatus('✓ 同期済 ' + new Date().toLocaleTimeString('ja-JP'));
+    } catch (e) {
+      console.warn(e);
+      setSyncStatus('⚠️ ' + (e.message || e));
+    }
+  }
+
+  function onSignedOut() {
+    currentUser = null;
+    $('authSignedOut').classList.remove('hidden');
+    $('authSignedIn').classList.add('hidden');
+    setSyncStatus('-');
+  }
+
+  if (window.firebase && window.FIREBASE_CONFIG) {
+    try {
+      firebaseApp = firebase.initializeApp(window.FIREBASE_CONFIG);
+      firebaseAuth = firebase.auth();
+      firebaseDb = firebase.firestore();
+      firebaseAuth.onAuthStateChanged(user => {
+        if (user) onSignedIn(user); else onSignedOut();
+      });
+      $('btnSignIn').addEventListener('click', async () => {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        try { await firebaseAuth.signInWithPopup(provider); }
+        catch (e) { alert('ログイン失敗: ' + (e.message || e)); }
+      });
+      $('btnSignOut').addEventListener('click', async () => {
+        if (!confirm('ログアウトしますか？\n（ローカルデータは残ります）')) return;
+        await firebaseAuth.signOut();
+      });
+    } catch (e) {
+      console.warn('Firebase init failed', e);
+    }
+  }
 
   // Init
   if ('serviceWorker' in navigator) {
