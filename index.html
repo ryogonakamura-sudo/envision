@@ -153,10 +153,32 @@
   .image-cycle:active { transform: scale(0.92) rotate(-180deg); }
   .image-cycle:disabled { opacity: 0.4; cursor: default; }
   .image-pos {
-    position: absolute; top: 8px; left: 8px;
+    position: absolute; bottom: 6px; left: 8px;
     background: rgba(0,0,0,0.55); color: #fff;
     font-size: 10px; padding: 4px 8px; border-radius: 10px;
     backdrop-filter: blur(4px);
+  }
+  .image-feedback {
+    position: absolute; top: 8px; left: 8px;
+    display: flex; gap: 6px;
+  }
+  .fb-btn {
+    background: rgba(0,0,0,0.55); color: #fff; border: 0;
+    width: 36px; height: 36px; border-radius: 18px;
+    display: grid; place-items: center; font-size: 16px;
+    backdrop-filter: blur(4px);
+    transition: transform .12s, background .15s;
+    cursor: pointer;
+  }
+  .fb-btn:hover { background: rgba(0,0,0,0.75); }
+  .fb-btn:active { transform: scale(0.9); }
+  .fb-good.active {
+    background: rgba(52,199,123,0.85);
+    box-shadow: 0 0 0 2px rgba(52,199,123,0.4);
+  }
+  .fb-bad.active {
+    background: rgba(255,93,108,0.85);
+    box-shadow: 0 0 0 2px rgba(255,93,108,0.4);
   }
 
   .word-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
@@ -506,6 +528,7 @@
     apiKey: 'vocabApp.apiKey',
     progress: 'vocabApp.progress', // { [id]: { latest: 'ok'|'ng'|null, history: [{round, result, at}] } }
     imageCache: 'vocabApp.imageCache', // { [`${lang}::${word}`]: { results, idx, complete } }
+    imageFeedback: 'vocabApp.imageFeedback', // { [`${lang}::${word}`]: { [url]: 'good'|'bad' } }
     round: 'vocabApp.round',
     autoSpeak: 'vocabApp.autoSpeak',
     voiceName: 'vocabApp.voiceName',
@@ -518,7 +541,7 @@
   const SYNCABLE_KEYS = new Set([
     'vocabApp.progress', 'vocabApp.userOverrides', 'vocabApp.userWords',
     'vocabApp.round', 'vocabApp.autoSpeak', 'vocabApp.voiceName',
-    'vocabApp.speechRate', 'vocabApp.imageLang',
+    'vocabApp.speechRate', 'vocabApp.imageLang', 'vocabApp.imageFeedback',
   ]);
   const save = (k, v) => {
     localStorage.setItem(k, JSON.stringify(v));
@@ -527,6 +550,7 @@
 
   let progress = load(STORAGE.progress, {});
   let imageCache = load(STORAGE.imageCache, {});
+  let imageFeedback = load(STORAGE.imageFeedback, {});
   let round = load(STORAGE.round, 0);
   let apiKey = load(STORAGE.apiKey, '');
   let autoSpeak = load(STORAGE.autoSpeak, false);
@@ -665,8 +689,59 @@
     const key = cacheKey(word, imageLang);
     const entry = imageCache[key];
     if (!entry || !entry.results || entry.results.length <= 1) return null;
-    entry.idx = (entry.idx + 1) % entry.results.length;
+    const fb = imageFeedback[key] || {};
+    const len = entry.results.length;
+    let next = (entry.idx + 1) % len;
+    for (let i = 1; i < len; i++) {
+      const cand = (entry.idx + i) % len;
+      if (fb[entry.results[cand].url] !== 'bad') { next = cand; break; }
+    }
+    entry.idx = next;
     save(STORAGE.imageCache, imageCache);
+    return entry;
+  }
+
+  // ---------- Image feedback ----------
+  function getFeedbackMap(word, lang) {
+    return imageFeedback[cacheKey(word, lang)] || {};
+  }
+  function setFeedback(word, lang, url, value) {
+    const key = cacheKey(word, lang);
+    if (!imageFeedback[key]) imageFeedback[key] = {};
+    if (value === null) delete imageFeedback[key][url];
+    else imageFeedback[key][url] = value;
+    if (Object.keys(imageFeedback[key]).length === 0) delete imageFeedback[key];
+    save(STORAGE.imageFeedback, imageFeedback);
+  }
+  function pickBestIndex(word, lang, entry) {
+    if (!entry || !entry.results || entry.results.length === 0) return 0;
+    const fb = getFeedbackMap(word, lang);
+    const goodIdx = entry.results.findIndex(r => fb[r.url] === 'good');
+    if (goodIdx !== -1) return goodIdx;
+    const nonBadIdx = entry.results.findIndex(r => fb[r.url] !== 'bad');
+    if (nonBadIdx !== -1) return nonBadIdx;
+    return 0;
+  }
+  function markImageBad(word) {
+    const lang = imageLang;
+    const key = cacheKey(word, lang);
+    const entry = imageCache[key];
+    if (!entry || !entry.results || entry.results.length === 0) return null;
+    const cur = entry.results[entry.idx];
+    if (!cur) return null;
+    setFeedback(word, lang, cur.url, 'bad');
+    if (entry.results.length > 1) return cycleImage(word);
+    return entry;
+  }
+  function toggleImageGood(word) {
+    const lang = imageLang;
+    const key = cacheKey(word, lang);
+    const entry = imageCache[key];
+    if (!entry || !entry.results || entry.results.length === 0) return null;
+    const cur = entry.results[entry.idx];
+    if (!cur) return null;
+    const fb = getFeedbackMap(word, lang);
+    setFeedback(word, lang, cur.url, fb[cur.url] === 'good' ? null : 'good');
     return entry;
   }
 
@@ -800,6 +875,13 @@
     const area = $('imageArea');
     area.innerHTML = '<div class="image-loading">画像を読み込み中…</div>';
     const entry = await ensureImageCandidates(w.english, w.japanese);
+    if (entry && entry.results && entry.results.length > 0) {
+      const best = pickBestIndex(w.english, imageLang, entry);
+      if (best !== entry.idx) {
+        entry.idx = best;
+        save(STORAGE.imageCache, imageCache);
+      }
+    }
     paintImage(area, w.english, entry);
   }
 
@@ -815,6 +897,32 @@
     el.alt = word;
     el.loading = 'eager';
     area.appendChild(el);
+
+    const fbMap = getFeedbackMap(word, imageLang);
+    const curState = fbMap[img.url] || null;
+    const fbBox = document.createElement('div');
+    fbBox.className = 'image-feedback';
+    const goodBtn = document.createElement('button');
+    goodBtn.className = 'fb-btn fb-good' + (curState === 'good' ? ' active' : '');
+    goodBtn.title = curState === 'good' ? '良い画像（解除するにはもう一度）' : 'この画像は合っている';
+    goodBtn.textContent = '⭕️';
+    goodBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = toggleImageGood(word);
+      if (next) paintImage(area, word, next);
+    });
+    const badBtn = document.createElement('button');
+    badBtn.className = 'fb-btn fb-bad' + (curState === 'bad' ? ' active' : '');
+    badBtn.title = 'この画像は合っていない（次の画像へ）';
+    badBtn.textContent = '❌';
+    badBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = markImageBad(word);
+      if (next) paintImage(area, word, next);
+    });
+    fbBox.appendChild(goodBtn);
+    fbBox.appendChild(badBtn);
+    area.appendChild(fbBox);
 
     if (entry.results.length > 1) {
       const pos = document.createElement('div');
@@ -1291,7 +1399,7 @@
       _app: 'enVision',
       _version: 2,
       exportedAt: new Date().toISOString(),
-      progress, imageCache, round, userOverrides, userWords,
+      progress, imageCache, imageFeedback, round, userOverrides, userWords,
     };
     const blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -1314,6 +1422,7 @@
       if (!confirm('現在の進捗を上書きします。よろしいですか？')) return;
       if (data.progress) { progress = data.progress; save(STORAGE.progress, progress); }
       if (data.imageCache) { imageCache = data.imageCache; save(STORAGE.imageCache, imageCache); }
+      if (data.imageFeedback) { imageFeedback = data.imageFeedback; save(STORAGE.imageFeedback, imageFeedback); }
       if (typeof data.round === 'number') { round = data.round; save(STORAGE.round, round); }
       if (data.userOverrides) { userOverrides = data.userOverrides; save(STORAGE.userOverrides, userOverrides); }
       if (Array.isArray(data.userWords)) { userWords = data.userWords; save(STORAGE.userWords, userWords); }
@@ -1366,7 +1475,7 @@
       const docRef = firebaseDb.collection('users').doc(currentUser.uid);
       await docRef.set({
         progress, userOverrides, userWords, round,
-        autoSpeak, voiceName, speechRate, imageLang,
+        autoSpeak, voiceName, speechRate, imageLang, imageFeedback,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       }, { merge: false });
       setSyncStatus('✓ 同期済 ' + new Date().toLocaleTimeString('ja-JP'));
@@ -1392,6 +1501,7 @@
     if (data.voiceName) { voiceName = data.voiceName; localStorage.setItem(STORAGE.voiceName, JSON.stringify(voiceName)); }
     if (typeof data.speechRate === 'number') { speechRate = data.speechRate; localStorage.setItem(STORAGE.speechRate, JSON.stringify(speechRate)); }
     if (data.imageLang) { imageLang = data.imageLang; localStorage.setItem(STORAGE.imageLang, JSON.stringify(imageLang)); }
+    if (data.imageFeedback) { imageFeedback = data.imageFeedback; localStorage.setItem(STORAGE.imageFeedback, JSON.stringify(imageFeedback)); }
     computeVocab();
   }
 
