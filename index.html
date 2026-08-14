@@ -51,6 +51,15 @@
     transition: background .15s;
   }
   .icon-btn:hover { background: var(--bg-elev); }
+  .icon-btn:disabled { opacity: 0.35; cursor: default; }
+  .undo-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--text);
+    height: 38px; padding: 0 12px; border-radius: 12px;
+    display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap;
+    transition: background .15s;
+  }
+  .undo-btn:hover:not(:disabled) { background: var(--bg-elev); }
+  .undo-btn:disabled { opacity: 0.35; cursor: default; }
 
   /* Cards & sections */
   .card {
@@ -109,11 +118,11 @@
   .quiz { flex: 1; display: flex; flex-direction: column; gap: 12px; }
   .progress {
     display: flex; justify-content: space-between; align-items: center;
-    color: var(--text-dim); font-size: 13px;
+    color: var(--text-dim); font-size: 13px; gap: 8px;
   }
   .progress-bar {
     flex: 1; height: 4px; background: var(--bg-elev); border-radius: 2px;
-    overflow: hidden; margin: 0 12px;
+    overflow: hidden; margin: 0 4px;
   }
   .progress-fill { height: 100%; background: var(--accent); transition: width .3s; }
 
@@ -371,7 +380,7 @@
     <main id="quiz" class="quiz hidden">
       <div class="progress">
         <button class="icon-btn" id="btnBack" aria-label="ホームへ">←</button>
-        <button class="icon-btn" id="btnUndo" aria-label="1つ前に戻る" title="1つ前に戻る" disabled>↶</button>
+        <button class="undo-btn" id="btnUndo" aria-label="1つ前の単語に戻る" title="1つ前の単語に戻る" disabled><span aria-hidden="true">↶</span>1つ前</button>
         <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
         <div id="progText">0 / 0</div>
       </div>
@@ -462,7 +471,10 @@
       </div>
       <div class="desc">画像はUnsplashで取得します。Access Keyは端末のlocalStorageに保存されます（クラウドには同期されません）。</div>
       <div class="label">Unsplash Access Key</div>
-      <input type="password" id="apiKeyInput" placeholder="あなたの Unsplash Access Key">
+      <div class="row" style="gap:8px;">
+        <input type="password" id="apiKeyInput" placeholder="あなたの Unsplash Access Key" style="flex:1;">
+        <button class="icon-btn" id="btnToggleKey" type="button" aria-label="キーを表示/隠す" title="キーを表示/隠す">👁</button>
+      </div>
       <a class="help-link" href="https://unsplash.com/developers" target="_blank" rel="noopener">→ Unsplashで無料キーを取得（unsplash.com/developers）</a>
       <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
         <div class="label">音声</div>
@@ -1358,6 +1370,8 @@
   }
   $('btnSettings').addEventListener('click', () => {
     $('apiKeyInput').value = apiKey;
+    $('apiKeyInput').type = 'password';
+    $('btnToggleKey').textContent = '👁';
     $('autoSpeakToggle').checked = autoSpeak;
     $('rateSlider').value = speechRate;
     $('rateLabel').textContent = Number(speechRate).toFixed(2);
@@ -1366,6 +1380,12 @@
     $('settingsModal').classList.add('open');
   });
   $('btnCloseSettings').addEventListener('click', () => $('settingsModal').classList.remove('open'));
+  $('btnToggleKey').addEventListener('click', () => {
+    const inp = $('apiKeyInput');
+    const reveal = inp.type === 'password';
+    inp.type = reveal ? 'text' : 'password';
+    $('btnToggleKey').textContent = reveal ? '🙈' : '👁';
+  });
   $('btnSaveSettings').addEventListener('click', () => {
     apiKey = $('apiKeyInput').value.trim();
     autoSpeak = $('autoSpeakToggle').checked;
