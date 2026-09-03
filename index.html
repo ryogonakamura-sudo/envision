@@ -966,6 +966,17 @@
     return { status: 'ok', photos: data.results || [], remaining };
   }
 
+  // 抽象語を写真で検索すると、本のページや看板など「文字が写っているだけ」の
+  // 画像が返りやすい。意味の手がかりにならないので、メタデータで弾く。
+  const TEXTY = /\b(text|texts|book|books|bookshelf|page|pages|letter|letters|lettering|word|words|writing|written|handwriting|calligraphy|typography|font|fonts|alphabet|sign|signage|signboard|billboard|poster|banner|label|quote|quotes|newspaper|newspapers|magazine|dictionary|document|documents|manuscript|scripture|bible|verse|script|print|printed|typewriter|keyboard|code|coding|spreadsheet|receipt|invoice|menu)\b/i;
+
+  function isTextImage(meta) {
+    return TEXTY.test(String(meta || '').toLowerCase());
+  }
+  const unsplashMeta = (p) =>
+    [p.alt_description, p.description, ...(p.tags || []).map(t => t.title || t)].filter(Boolean).join(' ');
+  const pixabayMeta = (p) => p.tags || '';
+
   // 「共感を呼ぶ」のような抽象語には写真が存在しない。Unsplash が空振りしたら
   // Pixabay のイラストを探す。日本語訳をそのまま投げられる（lang=ja）ので、
   // 英訳しづらい概念にはこちらの方が当たりやすい。
@@ -1011,11 +1022,33 @@
     for (const [q, lang] of attempts.slice(0, 4)) {
       const r = await searchPixabay(q, lang);
       if (r.status !== 'ok') return { status: r.status };
-      if (!r.photos.length) continue;
+      const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p)));
+      if (!usable.length) continue;
       return {
         status: 'ok', query: q, source: 'pixabay',
-        results: r.photos.map(p => ({
+        results: usable.map(p => ({
           url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
+        })),
+      };
+    }
+    return null;
+  }
+
+  async function tryUnsplashPhoto(word, japanese, lang) {
+    if (!apiKey) return null;
+    for (const query of queryCandidates(word, japanese, lang)) {
+      const r = await searchUnsplash(query, lang);
+      if (r.status !== 'ok') return { status: r.status, code: r.code };
+      // 本のページや看板など、文字が写っているだけの写真は意味の手がかりにならない
+      const usable = r.photos.filter(p => !isTextImage(unsplashMeta(p)));
+      if (!usable.length) continue;
+      return {
+        status: 'ok', query, source: 'unsplash',
+        results: usable.map(p => ({
+          url: p.urls.regular,
+          credit: p.user.name,
+          creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
+          source: 'unsplash',
         })),
       };
     }
@@ -1040,41 +1073,29 @@
       imageCache[key] = hit;
       save(STORAGE.imageCache, imageCache);
     };
+    // 単語は実物の写真が分かりやすいが、熟語・文のような抽象的な表現は
+    // 動作や表情を描いたイラストの方が意味に近い。種別で探す順番を変える。
+    const illustFirst = autoKind(word) !== 'word';
+    const sources = illustFirst
+      ? [() => tryPixabayIllustration(word, japanese), () => tryUnsplashPhoto(word, japanese, lang)]
+      : [() => tryUnsplashPhoto(word, japanese, lang), () => tryPixabayIllustration(word, japanese)];
     try {
-      if (apiKey) {
-        for (const query of queryCandidates(word, japanese, lang)) {
-          const r = await searchUnsplash(query, lang);
-          if (r.status !== 'ok') {
-            // 写真側が使えなくてもイラストは試す価値がある
-            const illust = await tryPixabayIllustration(word, japanese);
-            if (illust && illust.status === 'ok') {
-              const hit = { results: illust.results, idx: 0, complete: true, query: illust.query, source: 'pixabay', at: Date.now(), triedPixabay: true };
-              remember(hit);
-              return { entry: hit, status: 'ok' };
-            }
-            return { entry: null, status: r.status, code: r.code };
-          }
-          if (r.photos.length === 0) continue;
+      let lastError = null;
+      for (const run of sources) {
+        const r = await run();
+        if (!r) continue;
+        if (r.status === 'ok') {
           const hit = {
-            results: r.photos.map(p => ({
-              url: p.urls.regular,
-              credit: p.user.name,
-              creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
-              source: 'unsplash',
-            })),
-            idx: 0, complete: true, query, source: 'unsplash', at: Date.now(),
+            results: r.results, idx: 0, complete: true,
+            query: r.query, source: r.source, at: Date.now(),
+            triedPixabay: !!pixabayKey,
           };
           remember(hit);
           return { entry: hit, status: 'ok' };
         }
+        lastError = r; // 片方が落ちても、もう片方は試す
       }
-      const illust = await tryPixabayIllustration(word, japanese);
-      if (illust && illust.status === 'ok') {
-        const hit = { results: illust.results, idx: 0, complete: true, query: illust.query, source: 'pixabay', at: Date.now(), triedPixabay: true };
-        remember(hit);
-        return { entry: hit, status: 'ok' };
-      }
-      if (illust && illust.status !== 'ok') return { entry: null, status: illust.status };
+      if (lastError) return { entry: null, status: lastError.status, code: lastError.code };
       remember({ results: [], idx: 0, complete: true, at: Date.now(), triedPixabay: !!pixabayKey });
       return { entry: null, status: 'empty' };
     } catch (e) {
