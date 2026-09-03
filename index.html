@@ -932,7 +932,10 @@
   function queryCandidates(word, japanese, lang) {
     const jp = extractPrimaryJp(japanese);
     if (lang === 'ja') return [jp || word].filter(Boolean);
-    const raw = (word || '').trim().replace(/[.!?？！。,、]/g, ' ').replace(/\s+/g, ' ').trim();
+    const raw = (word || '').trim()
+      .replace(/[.!?？！。,、]/g, ' ')
+      .replace(/[~〜～]/g, ' ') // 「resonate with ~」の穴埋め記号は検索の邪魔になる
+      .replace(/\s+/g, ' ').trim();
     const out = [raw];
     const content = raw.split(' ').filter(t => t && !STOPWORDS.has(t.toLowerCase()));
     if (content.length) {
@@ -980,14 +983,32 @@
     return { status: 'ok', photos: data.hits || [] };
   }
 
+  // 訳文はそのままだと検索に向かない。「~の共感を呼ぶ」のような placeholder や
+  // 助詞・活用を落とし、素材サイトのタグに近い名詞（共感）まで削っていく。
+  function jpQueryCandidates(japanese) {
+    const cleaned = (japanese || '')
+      .replace(/[「」『』"'（）()\[\]【】]/g, ' ')
+      .replace(/[~〜～]/g, ' ')
+      .replace(/[。．.!！?？]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return [];
+    const first = (cleaned.split(/[、,，;；\/／\s]+/).filter(Boolean)[0] || cleaned)
+      .replace(/^[のをにへとがはでもや]+/, '');
+    if (!first) return [];
+    const out = [first];
+    // 日本語は漢字・カタカナの塊が名詞になりやすいので、2文字以上の最長の塊を拾う
+    const chunks = (first.match(/[一-龠]{2,}|[ァ-ヶー]{2,}/g) || []).sort((a, b) => b.length - a.length);
+    if (chunks[0] && chunks[0] !== first) out.push(chunks[0]);
+    return [...new Set(out)].filter(Boolean);
+  }
+
   async function tryPixabayIllustration(word, japanese) {
     if (!pixabayKey) return null;
-    const jp = extractPrimaryJp(japanese);
     // 日本語訳 → 英語の内容語 の順。抽象語ほど日本語の方が当たる。
-    const attempts = [];
-    if (jp) attempts.push([jp, 'ja']);
+    const attempts = jpQueryCandidates(japanese).map(q => [q, 'ja']);
     for (const q of queryCandidates(word, japanese, 'en')) attempts.push([q, 'en']);
-    for (const [q, lang] of attempts.slice(0, 3)) {
+    for (const [q, lang] of attempts.slice(0, 4)) {
       const r = await searchPixabay(q, lang);
       if (r.status !== 'ok') return { status: r.status };
       if (!r.photos.length) continue;
