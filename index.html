@@ -154,6 +154,12 @@
     display: grid; place-items: center; position: relative; overflow: hidden;
   }
   .image-area img { width: 100%; height: 100%; object-fit: cover; }
+  .image-placeholder .sub { display: block; font-size: 11px; opacity: 0.75; margin-top: 4px; }
+  .image-retry {
+    margin-top: 10px; background: rgba(255,255,255,0.1); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px; padding: 7px 16px; font-size: 12px;
+  }
+  .image-retry:hover { background: rgba(255,255,255,0.18); }
   .image-placeholder {
     width: 100%; height: 100%; display: grid; place-items: center;
     background: linear-gradient(135deg, #2a2f3a 0%, #1f232c 100%);
@@ -604,6 +610,8 @@
         <button class="icon-btn" id="btnToggleKey" type="button" aria-label="キーを表示/隠す" title="キーを表示/隠す">👁</button>
       </div>
       <a class="help-link" href="https://unsplash.com/developers" target="_blank" rel="noopener">→ Unsplashで無料キーを取得（unsplash.com/developers）</a>
+      <div class="muted" style="font-size:11px;">取得直後のキーは Demo 扱いで <b>1時間に50回</b>まで。上限に達すると画像が出なくなります（時間をおけば戻ります）。</div>
+      <button class="secondary" id="btnClearImageCache">🔄 画像キャッシュを削除して取り直す</button>
       <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
         <div class="label">音声</div>
         <div>
@@ -892,6 +900,7 @@
 
   // ---------- Image fetching ----------
   function cacheKey(word, lang) { return `${lang}::${word}`; }
+  const currentJapanese = (word) => (VOCAB.find(v => v.english === word) || {}).japanese || '';
 
   function extractPrimaryJp(jp) {
     if (!jp) return '';
@@ -900,47 +909,81 @@
     return parts[0] || jp;
   }
 
-  function buildQuery(word, japanese, lang) {
-    if (lang === 'ja') return extractPrimaryJp(japanese) || word;
-    return word;
+  // Unsplash は写真のタグ検索なので、"feel free to do" のような機能語だらけの句は
+  // そのままだとヒットしない。全文 → 内容語だけ → 主要語1語 の順に試す。
+  const STOPWORDS = new Set(['a', 'an', 'the', 'to', 'of', 'in', 'on', 'at', 'for', 'with', 'and',
+    'or', 'but', 'is', 'are', 'am', 'was', 'were', 'be', 'been', 'do', 'does', 'did', 'have', 'has',
+    'had', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'my', 'your', 'his', 'her', 'its', 'our',
+    'their', 'not', 'no', 'so', 'that', 'this', 'there', 'will', 'would', 'can', 'could', 'should',
+    'up', 'out', 'off', 'about', 'more', 'than', 'as', 'if', 'what', 'how', 'when', 'where', 'why',
+    'me', 'him', 'them', 'us', 'from', 'by', 'too', 'very', 'just', 'some', 'any']);
+
+  function queryCandidates(word, japanese, lang) {
+    const jp = extractPrimaryJp(japanese);
+    if (lang === 'ja') return [jp || word].filter(Boolean);
+    const raw = (word || '').trim().replace(/[.!?？！。,、]/g, ' ').replace(/\s+/g, ' ').trim();
+    const out = [raw];
+    const content = raw.split(' ').filter(t => t && !STOPWORDS.has(t.toLowerCase()));
+    if (content.length) {
+      out.push(content.slice(0, 2).join(' '));
+      out.push(content[0]);
+    }
+    return [...new Set(out)].filter(Boolean).slice(0, 3);
+  }
+
+  const NEG_CACHE_MS = 24 * 60 * 60 * 1000; // 見つからなかった単語を再試行するまでの間隔
+
+  // 「見つからなかった」と「APIが応答しなかった」を必ず区別して返す。
+  // 一緒くたにすると、レート制限やキー切れが "画像なし" に化けて原因が分からなくなる。
+  async function searchUnsplash(query, lang) {
+    const params = new URLSearchParams({
+      query, per_page: '10', orientation: 'landscape', content_filter: 'high',
+    });
+    if (lang === 'ja') params.set('lang', 'ja');
+    const res = await fetch(`https://api.unsplash.com/search/photos?${params.toString()}`, {
+      headers: { 'Authorization': `Client-ID ${apiKey}`, 'Accept-Version': 'v1' },
+    });
+    const remaining = res.headers.get('X-Ratelimit-Remaining');
+    if (res.status === 401) return { status: 'auth' };
+    if (res.status === 403) return { status: remaining === '0' ? 'rate' : 'auth' };
+    if (res.status === 429) return { status: 'rate' };
+    if (!res.ok) return { status: 'http', code: res.status };
+    const data = await res.json();
+    return { status: 'ok', photos: data.results || [], remaining };
   }
 
   async function ensureImageCandidates(word, japanese) {
     const lang = imageLang;
     const key = cacheKey(word, lang);
-    let entry = imageCache[key];
-    if (entry && entry.results && entry.results.length > 0 && entry.complete) return entry;
-    if (!apiKey) return entry || null;
+    const entry = imageCache[key];
+    if (entry && entry.complete) {
+      if ((entry.results || []).length > 0) return { entry, status: 'ok' };
+      // 見つからなかった結果もキャッシュする。毎回叩くと Unsplash の
+      // 時間あたり上限（Demoキーは50回/時）をすぐ使い切ってしまうため。
+      if (Date.now() - (entry.at || 0) < NEG_CACHE_MS) return { entry: null, status: 'empty' };
+    }
+    if (!apiKey) return { entry: entry || null, status: 'nokey' };
     try {
-      const query = buildQuery(word, japanese, lang);
-      const params = new URLSearchParams({
-        query,
-        per_page: '10',
-        orientation: 'landscape',
-        content_filter: 'high',
-      });
-      if (lang === 'ja') params.set('lang', 'ja');
-      const url = `https://api.unsplash.com/search/photos?${params.toString()}`;
-      const res = await fetch(url, { headers: { 'Authorization': `Client-ID ${apiKey}`, 'Accept-Version': 'v1' } });
-      if (!res.ok) {
-        console.warn('Unsplash error', res.status);
-        return null;
+      for (const query of queryCandidates(word, japanese, lang)) {
+        const r = await searchUnsplash(query, lang);
+        if (r.status !== 'ok') return { entry: null, status: r.status, code: r.code };
+        if (r.photos.length === 0) continue; // 次の候補クエリへ
+        const results = r.photos.map(p => ({
+          url: p.urls.regular,
+          credit: p.user.name,
+          creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
+        }));
+        const hit = { results, idx: 0, complete: true, query, at: Date.now() };
+        imageCache[key] = hit;
+        save(STORAGE.imageCache, imageCache);
+        return { entry: hit, status: 'ok' };
       }
-      const data = await res.json();
-      const photos = data.results || [];
-      if (photos.length === 0) return null;
-      const results = photos.map(p => ({
-        url: p.urls.regular,
-        credit: p.user.name,
-        creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
-      }));
-      entry = { results, idx: 0, complete: true, query };
-      imageCache[key] = entry;
+      imageCache[key] = { results: [], idx: 0, complete: true, at: Date.now() };
       save(STORAGE.imageCache, imageCache);
-      return entry;
+      return { entry: null, status: 'empty' };
     } catch (e) {
-      console.warn('ensureImageCandidates failed', e);
-      return null;
+      console.warn('画像取得に失敗', e);
+      return { entry: null, status: 'network' };
     }
   }
 
@@ -1234,7 +1277,7 @@
     // Image
     const area = $('imageArea');
     area.innerHTML = '<div class="image-loading">画像を読み込み中…</div>';
-    const entry = await ensureImageCandidates(w.english, w.japanese);
+    const { entry, status } = await ensureImageCandidates(w.english, w.japanese);
     if (entry && entry.results && entry.results.length > 0) {
       const best = pickBestIndex(w.english, imageLang, entry);
       if (best !== entry.idx) {
@@ -1242,12 +1285,34 @@
         save(STORAGE.imageCache, imageCache);
       }
     }
-    paintImage(area, w.english, entry);
+    paintImage(area, w.english, entry, status);
   }
 
-  function paintImage(area, word, entry) {
+  // 画像が出せなかった理由をそのまま伝える（原因ごとに打つ手が違うため）
+  const IMAGE_ERRORS = {
+    nokey: '⚙️ から Unsplash キーを設定すると画像が表示されます',
+    empty: 'この語に合う画像が見つかりませんでした',
+    rate: '⏳ Unsplash の1時間あたりの上限に達しました<span class="sub">Demoキーは50回/時。時間をおくと戻ります</span>',
+    auth: '🔑 Unsplash キーが無効です<span class="sub">⚙️ から登録し直してください</span>',
+    network: '📡 通信に失敗しました<span class="sub">オフラインかもしれません</span>',
+  };
+
+  function paintImage(area, word, entry, status) {
     if (!entry || !entry.results || entry.results.length === 0) {
-      area.innerHTML = `<div class="image-placeholder">${apiKey ? '画像が見つかりませんでした' : '⚙️ から Unsplash キーを設定すると画像が表示されます'}</div>`;
+      const msg = IMAGE_ERRORS[status] || (status === 'http' ? 'Unsplash がエラーを返しました' : '画像が見つかりませんでした');
+      area.innerHTML = `<div class="image-placeholder"><div>${msg}</div></div>`;
+      if (status === 'rate' || status === 'network' || status === 'http') {
+        const btn = document.createElement('button');
+        btn.className = 'image-retry';
+        btn.textContent = '再試行';
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          area.innerHTML = '<div class="image-loading">画像を読み込み中…</div>';
+          const r = await ensureImageCandidates(word, currentJapanese(word));
+          paintImage(area, word, r.entry, r.status);
+        });
+        area.querySelector('.image-placeholder').appendChild(btn);
+      }
       return;
     }
     const img = entry.results[entry.idx];
@@ -1809,6 +1874,14 @@
     $('settingsModal').classList.add('open');
   });
   $('btnCloseSettings').addEventListener('click', () => $('settingsModal').classList.remove('open'));
+  $('btnClearImageCache').addEventListener('click', () => {
+    const n = Object.keys(imageCache).length;
+    const miss = Object.values(imageCache).filter(e => (e.results || []).length === 0).length;
+    if (!confirm(`画像キャッシュ ${n} 件（うち「見つからなかった」${miss} 件）を削除して取り直しますか？`)) return;
+    imageCache = {};
+    save(STORAGE.imageCache, imageCache);
+    alert('削除しました。次に単語を表示したときに取得し直します。');
+  });
   $('btnToggleKey').addEventListener('click', () => {
     const inp = $('apiKeyInput');
     const reveal = inp.type === 'password';
