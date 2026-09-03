@@ -240,16 +240,34 @@
   .note { font-size: 13px; color: var(--text-dim); white-space: pre-wrap; padding-top: 8px; border-top: 1px dashed var(--border); }
 
   /* 2段階表示: ①英語だけ → ②日本語を大きく表示 + ⭕️/❌ が出現 */
-  #revealedBox { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  /* safe center: 中身がはみ出すときは上に溢れさせず先頭揃えにする（重なり防止） */
+  #revealedBox { flex: 1; display: flex; flex-direction: column; justify-content: safe center; gap: 14px; min-height: 0; }
   .quiz:not(.revealed) .answer-row { display: none; }
-  .quiz.revealed .image-area { max-height: 30vh; }
+  .quiz.revealed .image-area { max-height: 26vh; }
+  /* 学習中は画面をビューポートに固定し、はみ出す例文などはカード内でスクロールさせる。
+     こうしないと ⭕️/❌ の裏に内容が隠れて気づけない。 */
+  body.quiz-mode { height: 100dvh; overflow: hidden; }
+  body.quiz-mode .app,
+  body.quiz-mode .quiz,
+  body.quiz-mode .word-card { min-height: 0; }
+  body.quiz-mode .word-body { min-height: 0; overflow-y: auto; }
   .quiz.revealed .japanese {
     font-size: 30px; font-weight: 700; line-height: 1.45; text-align: center;
-    padding: 8px 0;
+    padding: 4px 0;
   }
   .quiz.revealed .japanese.sm { font-size: 22px; }
-  .quiz.revealed .note { text-align: center; }
   .quiz.revealed .answer-row { animation: riseIn .18s ease-out; }
+
+  /* 例文・類義語・メモ */
+  .extras { display: flex; flex-direction: column; gap: 8px; }
+  .extras:empty { display: none; }
+  .extra {
+    background: var(--bg-elev2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px 12px; text-align: left;
+  }
+  .extra-label { font-size: 11px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+  .extra-body { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  #synonymText { color: var(--accent); }
   @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .english.sm { font-size: 22px; }
   .english.xs { font-size: 18px; }
@@ -461,7 +479,20 @@
           <button class="reveal-btn" id="btnReveal">タップで日本語を表示<span class="sub">思い出してからタップ</span></button>
           <div id="revealedBox" class="hidden">
             <div class="japanese" id="japaneseText"></div>
-            <div class="note hidden" id="noteText"></div>
+            <div class="extras">
+              <div class="extra hidden" id="exampleBox">
+                <div class="extra-label">💬 例文</div>
+                <div class="extra-body" id="exampleText"></div>
+              </div>
+              <div class="extra hidden" id="synonymBox">
+                <div class="extra-label">🔗 似た意味の単語</div>
+                <div class="extra-body" id="synonymText"></div>
+              </div>
+              <div class="extra hidden" id="noteBox">
+                <div class="extra-label">📝 メモ</div>
+                <div class="extra-body" id="noteText"></div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -498,8 +529,16 @@
         <input type="text" id="wordJa" placeholder="例: 容疑、告発" autocomplete="off">
       </div>
       <div>
+        <div class="label" style="margin-bottom:6px;">例文（任意）</div>
+        <textarea id="wordExample" rows="3" placeholder="例: I couldn't sleep because of the noise.&#10;（騒音のせいで眠れなかった）" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+      <div>
+        <div class="label" style="margin-bottom:6px;">似た意味の単語（任意）</div>
+        <textarea id="wordSynonyms" rows="2" placeholder="例: quit / resign / step down" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+      </div>
+      <div>
         <div class="label" style="margin-bottom:6px;">メモ（任意）</div>
-        <textarea id="wordNote" rows="3" placeholder="例文・類義語・自分の連想など" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
+        <textarea id="wordNote" rows="3" placeholder="自分の連想・覚え方など" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
       </div>
       <div class="row" style="gap:10px; align-items:flex-start;">
         <div style="flex:1; min-width:0;">
@@ -608,7 +647,7 @@
         <button class="secondary" id="btnCsvImport" style="flex:1;">📄 CSVから単語を一括追加</button>
         <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none;">
       </div>
-      <div class="muted" style="font-size:11px;">CSVのヘッダ例: <code>English,日本語訳,メモ</code> や <code>word,translation,note</code> を自動認識</div>
+      <div class="muted" style="font-size:11px;">CSVのヘッダ例: <code>English,日本語訳,例文,類義語,メモ</code> や <code>word,translation,example,synonym,note</code> を自動認識（例文以降は任意）</div>
       <div class="row" style="margin-top:8px; gap:10px;">
         <button class="secondary" id="btnCloseSettings" style="flex:1;">閉じる</button>
         <button class="primary" id="btnSaveSettings" style="flex:1; padding:12px;">保存</button>
@@ -787,7 +826,10 @@
   const show = (id) => $(id).classList.remove('hidden');
   const hide = (id) => $(id).classList.add('hidden');
   const screens = ['home', 'quiz', 'result', 'list'];
-  const goto = (name) => screens.forEach(s => s === name ? show(s) : hide(s));
+  const goto = (name) => {
+    screens.forEach(s => s === name ? show(s) : hide(s));
+    document.body.classList.toggle('quiz-mode', name === 'quiz');
+  };
 
   function getStatus(id) {
     return progress[id]?.latest || null;
@@ -1142,8 +1184,18 @@
     const ja = $('japaneseText');
     ja.textContent = w.japanese;
     ja.classList.toggle('sm', w.japanese.length > 24);
-    if (w.note) { $('noteText').textContent = w.note; $('noteText').classList.remove('hidden'); }
-    else $('noteText').classList.add('hidden');
+
+    // 例文 / 似た意味の単語 / メモ（入力があるものだけ出す）
+    const extras = [
+      ['exampleBox', 'exampleText', w.example],
+      ['synonymBox', 'synonymText', w.synonyms],
+      ['noteBox', 'noteText', w.note],
+    ];
+    for (const [box, body, value] of extras) {
+      const has = !!(value && value.trim());
+      $(box).classList.toggle('hidden', !has);
+      if (has) $(body).textContent = value.trim();
+    }
 
     // Badges
     const badgeRow = $('badgeRow');
@@ -1345,7 +1397,8 @@
       if (listKind !== 'all' && kindOf(w) !== listKind) return false;
       if (listPos !== 'all' && posOf(w) !== listPos) return false;
       if (q) {
-        const hay = (w.english + ' ' + w.japanese + ' ' + (w.note || '') + ' ' + sceneOf(w)).toLowerCase();
+        const hay = (w.english + ' ' + w.japanese + ' ' + (w.note || '') + ' '
+          + (w.example || '') + ' ' + (w.synonyms || '') + ' ' + sceneOf(w)).toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -1455,6 +1508,8 @@
     const enIdx = findColumn(headers, ['english', '英単語', '単語', 'word', 'term']);
     const jaIdx = findColumn(headers, ['日本語訳', '日本語', '訳', 'japanese', 'translation', 'meaning']);
     const noteIdx = findColumn(headers, ['メモ', 'note', 'memo', 'comment']);
+    const exIdx = findColumn(headers, ['例文', 'example', 'sentence', 'ex']);
+    const synIdx = findColumn(headers, ['類義語', '似た意味', '同義語', 'synonym', 'similar']);
     if (enIdx < 0 || jaIdx < 0) {
       alert('「英単語」と「日本語訳」に相当する列が見つかりません。\nヘッダ行を確認してください。\n見つかった列: ' + headers.join(', '));
       return;
@@ -1466,10 +1521,12 @@
       const en = (r[enIdx] || '').trim();
       const ja = (r[jaIdx] || '').trim();
       const note = noteIdx >= 0 ? (r[noteIdx] || '').trim() : '';
+      const example = exIdx >= 0 ? (r[exIdx] || '').trim() : '';
+      const synonyms = synIdx >= 0 ? (r[synIdx] || '').trim() : '';
       if (!en || !ja) { skipped++; continue; }
       if (existingEn.has(en.toLowerCase())) { skipped++; continue; }
       const id = 'u_' + Date.now().toString(36) + '_' + i.toString(36) + Math.random().toString(36).slice(2, 5);
-      userWords.push({ id, english: en, japanese: ja, note,
+      userWords.push({ id, english: en, japanese: ja, note, example, synonyms,
         notionCheck1: false, notionCheck2: false, notionCheck3: false });
       existingEn.add(en.toLowerCase());
       added++;
@@ -1502,6 +1559,8 @@
       if (!w) return;
       $('wordEn').value = w.english;
       $('wordJa').value = w.japanese;
+      $('wordExample').value = w.example || '';
+      $('wordSynonyms').value = w.synonyms || '';
       $('wordNote').value = w.note || '';
       // 「自動」に、いま自動判定されている値を表示する
       const ak = autoKind(w.english);
@@ -1513,6 +1572,8 @@
     } else {
       $('wordEn').value = '';
       $('wordJa').value = '';
+      $('wordExample').value = '';
+      $('wordSynonyms').value = '';
       $('wordNote').value = '';
       $('wordKind').options[0].textContent = '自動';
       $('wordPos').options[0].textContent = '自動';
@@ -1535,26 +1596,28 @@
     const en = $('wordEn').value.trim();
     const ja = $('wordJa').value.trim();
     const note = $('wordNote').value.trim();
+    const example = $('wordExample').value.trim();
+    const synonyms = $('wordSynonyms').value.trim();
     if (!en || !ja) { alert('英単語と日本語訳は必須です'); return; }
     let savedId = editingId;
     if (editingId) {
       if (editingId.startsWith('u_')) {
         const idx = userWords.findIndex(u => u.id === editingId);
         if (idx >= 0) {
-          userWords[idx] = { ...userWords[idx], english: en, japanese: ja, note };
+          userWords[idx] = { ...userWords[idx], english: en, japanese: ja, note, example, synonyms };
           save(STORAGE.userWords, userWords);
         }
       } else {
         userOverrides[editingId] = {
           ...(userOverrides[editingId] || {}),
-          english: en, japanese: ja, note,
+          english: en, japanese: ja, note, example, synonyms,
           deleted: false,
         };
         save(STORAGE.userOverrides, userOverrides);
       }
     } else {
       const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-      userWords.push({ id, english: en, japanese: ja, note,
+      userWords.push({ id, english: en, japanese: ja, note, example, synonyms,
         notionCheck1: false, notionCheck2: false, notionCheck3: false });
       save(STORAGE.userWords, userWords);
       savedId = id;
