@@ -153,7 +153,8 @@
     width: 100%; aspect-ratio: 16/10; background: var(--bg-elev2);
     display: grid; place-items: center; position: relative; overflow: hidden;
   }
-  .image-area img { width: 100%; height: 100%; object-fit: cover; }
+  /* grid の行が auto なので height:100% だと画像の実寸に伸びてはみ出す。絶対配置で枠に合わせる。 */
+  .image-area img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .image-placeholder .sub { display: block; font-size: 11px; opacity: 0.75; margin-top: 4px; }
   .image-retry {
     margin-top: 10px; background: rgba(255,255,255,0.1); color: var(--text);
@@ -249,7 +250,13 @@
   /* safe center: 中身がはみ出すときは上に溢れさせず先頭揃えにする（重なり防止） */
   #revealedBox { flex: 1; display: flex; flex-direction: column; justify-content: safe center; gap: 14px; min-height: 0; }
   .quiz:not(.revealed) .answer-row { display: none; }
-  .quiz.revealed .image-area { max-height: 26vh; }
+  /* 日本語を出すと画像は縮むが、cover のままだと上下が切り取られて絵の下半分が消える。
+     高さから 16:10 の幅を決めて中央に置き、contain で全体を見せる。 */
+  .quiz.revealed .image-area {
+    flex: none; align-self: center;
+    height: 30vh; width: auto; max-width: 100%; aspect-ratio: 16/10;
+  }
+  .quiz.revealed .image-area img { object-fit: contain; }
   /* 学習中は画面をビューポートに固定し、はみ出す例文などはカード内でスクロールさせる。
      こうしないと ⭕️/❌ の裏に内容が隠れて気づけない。 */
   body.quiz-mode { height: 100dvh; overflow: hidden; }
