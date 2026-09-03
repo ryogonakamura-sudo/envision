@@ -1,5 +1,5 @@
 /* enVision service worker — minimal cache-first shell, network-fall-through for everything else */
-const CACHE = 'envision-v6';
+const CACHE = 'envision-v7';
 const SHELL = [
   './',
   './index.html',

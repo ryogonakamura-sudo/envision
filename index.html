@@ -611,6 +611,15 @@
       </div>
       <a class="help-link" href="https://unsplash.com/developers" target="_blank" rel="noopener">→ Unsplashで無料キーを取得（unsplash.com/developers）</a>
       <div class="muted" style="font-size:11px;">取得直後のキーは Demo 扱いで <b>1時間に50回</b>まで。上限に達すると画像が出なくなります（時間をおけば戻ります）。</div>
+
+      <div class="label" style="padding-top:12px;">Pixabay API Key（任意）</div>
+      <div class="row" style="gap:8px;">
+        <input type="password" id="pixabayKeyInput" placeholder="イラスト用（登録するとフォールバックが有効に）" style="flex:1;">
+        <button class="icon-btn" id="btnTogglePixKey" type="button" aria-label="キーを表示/隠す" title="キーを表示/隠す">👁</button>
+      </div>
+      <a class="help-link" href="https://pixabay.com/api/docs/" target="_blank" rel="noopener">→ Pixabayで無料キーを取得（審査なし・100回/分）</a>
+      <div class="muted" style="font-size:11px;">「共感を呼ぶ」のような抽象的な語は写真が存在しません。Unsplashで見つからなかったとき、Pixabayの<b>イラスト</b>を日本語訳で探します。</div>
+
       <button class="secondary" id="btnClearImageCache">🔄 画像キャッシュを削除して取り直す</button>
       <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
         <div class="label">音声</div>
@@ -684,6 +693,7 @@
     imageLang: 'vocabApp.imageLang', // 'en' | 'ja'
     userOverrides: 'vocabApp.userOverrides', // { [baseId]: { english?, japanese?, note?, deleted? } }
     userWords: 'vocabApp.userWords', // [{ id, english, japanese, note }]
+    pixabayKey: 'vocabApp.pixabayKey', // 抽象語のイラスト取得用（任意）
     wordMeta: 'vocabApp.wordMeta', // { [id]: { kind?, pos?, scene? } } 手動で上書きした分類のみ
     studyPrefs: 'vocabApp.studyPrefs', // { kind, pos, scene, sort }
   };
@@ -704,6 +714,7 @@
   let imageFeedback = load(STORAGE.imageFeedback, {});
   let round = load(STORAGE.round, 0);
   let apiKey = load(STORAGE.apiKey, '');
+  let pixabayKey = load(STORAGE.pixabayKey, '');
   let autoSpeak = load(STORAGE.autoSpeak, false);
   let voiceName = load(STORAGE.voiceName, '');
   let speechRate = load(STORAGE.speechRate, 0.95);
@@ -952,6 +963,44 @@
     return { status: 'ok', photos: data.results || [], remaining };
   }
 
+  // 「共感を呼ぶ」のような抽象語には写真が存在しない。Unsplash が空振りしたら
+  // Pixabay のイラストを探す。日本語訳をそのまま投げられる（lang=ja）ので、
+  // 英訳しづらい概念にはこちらの方が当たりやすい。
+  async function searchPixabay(query, lang) {
+    const params = new URLSearchParams({
+      key: pixabayKey, q: query, image_type: 'illustration',
+      per_page: '20', safesearch: 'true', order: 'popular',
+    });
+    if (lang) params.set('lang', lang);
+    const res = await fetch(`https://pixabay.com/api/?${params.toString()}`);
+    if (res.status === 429) return { status: 'rate' };
+    if (res.status === 400 || res.status === 401) return { status: 'auth' };
+    if (!res.ok) return { status: 'http', code: res.status };
+    const data = await res.json();
+    return { status: 'ok', photos: data.hits || [] };
+  }
+
+  async function tryPixabayIllustration(word, japanese) {
+    if (!pixabayKey) return null;
+    const jp = extractPrimaryJp(japanese);
+    // 日本語訳 → 英語の内容語 の順。抽象語ほど日本語の方が当たる。
+    const attempts = [];
+    if (jp) attempts.push([jp, 'ja']);
+    for (const q of queryCandidates(word, japanese, 'en')) attempts.push([q, 'en']);
+    for (const [q, lang] of attempts.slice(0, 3)) {
+      const r = await searchPixabay(q, lang);
+      if (r.status !== 'ok') return { status: r.status };
+      if (!r.photos.length) continue;
+      return {
+        status: 'ok', query: q, source: 'pixabay',
+        results: r.photos.map(p => ({
+          url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
+        })),
+      };
+    }
+    return null;
+  }
+
   async function ensureImageCandidates(word, japanese) {
     const lang = imageLang;
     const key = cacheKey(word, lang);
@@ -960,26 +1009,52 @@
       if ((entry.results || []).length > 0) return { entry, status: 'ok' };
       // 見つからなかった結果もキャッシュする。毎回叩くと Unsplash の
       // 時間あたり上限（Demoキーは50回/時）をすぐ使い切ってしまうため。
-      if (Date.now() - (entry.at || 0) < NEG_CACHE_MS) return { entry: null, status: 'empty' };
+      // Pixabayキーを後から足した場合は探し直せるよう、鍵の有無も見る。
+      const staleNeg = Date.now() - (entry.at || 0) >= NEG_CACHE_MS;
+      const canTryIllust = pixabayKey && !entry.triedPixabay;
+      if (!staleNeg && !canTryIllust) return { entry: null, status: 'empty' };
     }
-    if (!apiKey) return { entry: entry || null, status: 'nokey' };
+    if (!apiKey && !pixabayKey) return { entry: entry || null, status: 'nokey' };
+    const remember = (hit) => {
+      imageCache[key] = hit;
+      save(STORAGE.imageCache, imageCache);
+    };
     try {
-      for (const query of queryCandidates(word, japanese, lang)) {
-        const r = await searchUnsplash(query, lang);
-        if (r.status !== 'ok') return { entry: null, status: r.status, code: r.code };
-        if (r.photos.length === 0) continue; // 次の候補クエリへ
-        const results = r.photos.map(p => ({
-          url: p.urls.regular,
-          credit: p.user.name,
-          creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
-        }));
-        const hit = { results, idx: 0, complete: true, query, at: Date.now() };
-        imageCache[key] = hit;
-        save(STORAGE.imageCache, imageCache);
+      if (apiKey) {
+        for (const query of queryCandidates(word, japanese, lang)) {
+          const r = await searchUnsplash(query, lang);
+          if (r.status !== 'ok') {
+            // 写真側が使えなくてもイラストは試す価値がある
+            const illust = await tryPixabayIllustration(word, japanese);
+            if (illust && illust.status === 'ok') {
+              const hit = { results: illust.results, idx: 0, complete: true, query: illust.query, source: 'pixabay', at: Date.now(), triedPixabay: true };
+              remember(hit);
+              return { entry: hit, status: 'ok' };
+            }
+            return { entry: null, status: r.status, code: r.code };
+          }
+          if (r.photos.length === 0) continue;
+          const hit = {
+            results: r.photos.map(p => ({
+              url: p.urls.regular,
+              credit: p.user.name,
+              creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
+              source: 'unsplash',
+            })),
+            idx: 0, complete: true, query, source: 'unsplash', at: Date.now(),
+          };
+          remember(hit);
+          return { entry: hit, status: 'ok' };
+        }
+      }
+      const illust = await tryPixabayIllustration(word, japanese);
+      if (illust && illust.status === 'ok') {
+        const hit = { results: illust.results, idx: 0, complete: true, query: illust.query, source: 'pixabay', at: Date.now(), triedPixabay: true };
+        remember(hit);
         return { entry: hit, status: 'ok' };
       }
-      imageCache[key] = { results: [], idx: 0, complete: true, at: Date.now() };
-      save(STORAGE.imageCache, imageCache);
+      if (illust && illust.status !== 'ok') return { entry: null, status: illust.status };
+      remember({ results: [], idx: 0, complete: true, at: Date.now(), triedPixabay: !!pixabayKey });
       return { entry: null, status: 'empty' };
     } catch (e) {
       console.warn('画像取得に失敗', e);
@@ -1291,7 +1366,7 @@
   // 画像が出せなかった理由をそのまま伝える（原因ごとに打つ手が違うため）
   const IMAGE_ERRORS = {
     nokey: '⚙️ から Unsplash キーを設定すると画像が表示されます',
-    empty: 'この語に合う画像が見つかりませんでした',
+    empty: 'この語に合う画像が見つかりませんでした<span class="sub">⚙️ に Pixabay キーを足すとイラストも探します</span>',
     rate: '⏳ Unsplash の1時間あたりの上限に達しました<span class="sub">Demoキーは50回/時。時間をおくと戻ります</span>',
     auth: '🔑 Unsplash キーが無効です<span class="sub">⚙️ から登録し直してください</span>',
     network: '📡 通信に失敗しました<span class="sub">オフラインかもしれません</span>',
@@ -1373,7 +1448,7 @@
       a.href = img.creditUrl || '#';
       a.target = '_blank';
       a.rel = 'noopener';
-      a.textContent = `📷 ${img.credit}`;
+      a.textContent = `${img.source === 'pixabay' ? '🎨' : '📷'} ${img.credit}`;
       area.appendChild(a);
     }
   }
@@ -1866,6 +1941,9 @@
     $('apiKeyInput').value = apiKey;
     $('apiKeyInput').type = 'password';
     $('btnToggleKey').textContent = '👁';
+    $('pixabayKeyInput').value = pixabayKey;
+    $('pixabayKeyInput').type = 'password';
+    $('btnTogglePixKey').textContent = '👁';
     $('autoSpeakToggle').checked = autoSpeak;
     $('rateSlider').value = speechRate;
     $('rateLabel').textContent = Number(speechRate).toFixed(2);
@@ -1882,14 +1960,20 @@
     save(STORAGE.imageCache, imageCache);
     alert('削除しました。次に単語を表示したときに取得し直します。');
   });
-  $('btnToggleKey').addEventListener('click', () => {
-    const inp = $('apiKeyInput');
-    const reveal = inp.type === 'password';
-    inp.type = reveal ? 'text' : 'password';
-    $('btnToggleKey').textContent = reveal ? '🙈' : '👁';
-  });
+  const bindKeyToggle = (btnId, inputId) => {
+    $(btnId).addEventListener('click', () => {
+      const inp = $(inputId);
+      const reveal = inp.type === 'password';
+      inp.type = reveal ? 'text' : 'password';
+      $(btnId).textContent = reveal ? '🙈' : '👁';
+    });
+  };
+  bindKeyToggle('btnToggleKey', 'apiKeyInput');
+  bindKeyToggle('btnTogglePixKey', 'pixabayKeyInput');
   $('btnSaveSettings').addEventListener('click', () => {
     apiKey = $('apiKeyInput').value.trim();
+    pixabayKey = $('pixabayKeyInput').value.trim();
+    save(STORAGE.pixabayKey, pixabayKey);
     autoSpeak = $('autoSpeakToggle').checked;
     voiceName = $('voiceSelect').value || voiceName;
     speechRate = parseFloat($('rateSlider').value) || 0.95;
