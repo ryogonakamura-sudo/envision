@@ -486,6 +486,7 @@
         <div class="word-body">
           <div class="english-row">
             <div class="english" id="englishWord">-</div>
+            <button class="speak-btn" id="btnEditWord" title="この単語を編集" aria-label="この単語を編集">✏️</button>
             <button class="speak-btn" id="btnSpeak" title="発音を聞く" aria-label="発音を聞く">🔊</button>
           </div>
           <div id="badgeRow" class="row" style="gap:6px; flex-wrap:wrap; margin-top:-6px;"></div>
@@ -1811,7 +1812,8 @@
       const ap = ak === 'sentence' ? '' : autoPos(w.english, w.japanese);
       $('wordPos').options[0].textContent = ap ? `自動（${ap}）` : '自動';
       $('btnWordDelete').style.display = '';
-      $('btnWordStudy').style.display = '';
+      // 学習中は「この単語だけ学習」を出さない（今のセッションが消えてしまうため）
+      $('btnWordStudy').style.display = $('quiz').classList.contains('hidden') ? '' : 'none';
     } else {
       $('wordEn').value = '';
       $('wordJa').value = '';
@@ -1876,7 +1878,16 @@
     computeVocab();
     closeWordModal();
     if (!$('list').classList.contains('hidden')) renderList();
+    if (!$('quiz').classList.contains('hidden')) refreshQuizCard();
     renderHome();
+  }
+
+  // 学習中に編集したら、めくり直さずその場で反映する。
+  // 日本語を出したまま直したときは、出したままに戻す。
+  async function refreshQuizCard() {
+    const wasRevealed = revealed;
+    await renderCard();
+    if (wasRevealed) reveal();
   }
 
   function deleteWord() {
@@ -1898,9 +1909,24 @@
       save(STORAGE.wordMeta, wordMeta);
     }
     computeVocab();
+    const removedId = editingId;
     closeWordModal();
     if (!$('list').classList.contains('hidden')) renderList();
+    if (!$('quiz').classList.contains('hidden')) dropFromSession(removedId);
     renderHome();
+  }
+
+  // 学習中の単語を削除したら、出題キューからも取り除いて次へ進める
+  function dropFromSession(id) {
+    const at = queue.indexOf(id);
+    if (at >= 0) {
+      queue.splice(at, 1);
+      if (at < cursor) cursor--;
+    }
+    sessionResults = sessionResults.filter(r => r.id !== id);
+    if (queue.length === 0) { goto('home'); renderHome(); return; }
+    if (cursor >= queue.length) cursor = queue.length - 1;
+    renderCard();
   }
 
   // ---------- Quiz start ----------
@@ -1954,6 +1980,12 @@
     e.stopPropagation();
     const w = VOCAB.find(v => v.id === queue[cursor]);
     if (w) speak(w.english);
+  });
+
+  // 学習中に誤りに気づいたら、その場で直せるようにする
+  $('btnEditWord').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (queue[cursor]) openWordModal(queue[cursor]);
   });
 
   $('btnOk').addEventListener('click', () => { if (!revealed) reveal(); else answer('ok'); });
