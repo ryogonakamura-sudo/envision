@@ -1,5 +1,5 @@
 /* enVision service worker — network-first HTML, cache-first assets */
-const CACHE = 'envision-v15';
+const CACHE = 'envision-v16';
 const SHELL = [
   './',
   './index.html',
@@ -51,8 +51,13 @@ self.addEventListener('fetch', (e) => {
 
   if (isHtml(e.request, url)) {
     e.respondWith(
-      fetch(e.request).then(store).catch(() =>
-        caches.match(e.request).then(cached => cached || caches.match('./index.html')))
+      // GitHub Pages の max-age=600 が効くと、ネットワークを見に行っても 10 分間は
+      // ブラウザのキャッシュが古い HTML を返す。スーパーリロードもここは素通しなので、
+      // インストール時と同じく必ず取り直させる。
+      fetch(new Request(url.href, { cache: 'reload', credentials: 'same-origin' }))
+        .then(store)
+        .catch(() =>
+          caches.match(e.request).then(cached => cached || caches.match('./index.html')))
     );
     return;
   }
