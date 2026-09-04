@@ -1,5 +1,5 @@
-/* enVision service worker — minimal cache-first shell, network-fall-through for everything else */
-const CACHE = 'envision-v13';
+/* enVision service worker — network-first HTML, cache-first assets */
+const CACHE = 'envision-v14';
 const SHELL = [
   './',
   './index.html',
@@ -12,7 +12,13 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(CACHE)
+      // GitHub Pages は index.html に数分の HTTP キャッシュを付ける。素の addAll だと
+      // ブラウザのキャッシュから古いシェルを掴んでしまうので、必ず取り直させる。
+      .then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (e) => {
@@ -23,21 +29,38 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// アプリ本体は index.html にすべて入っている。ここをキャッシュ優先にすると、
+// 更新を入れても一度は必ず古い画面が出る（新しい SW が入るのは表示より後のため）。
+// 起動のたびにまずネットワークを見て、繋がらないときだけキャッシュに落とす。
+const isHtml = (req, url) =>
+  req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Never intercept Unsplash / external — let them hit network with browser cache.
   if (url.origin !== self.location.origin) return;
   if (e.request.method !== 'GET') return;
 
+  const store = (res) => {
+    if (res && res.ok && res.type === 'basic') {
+      const copy = res.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy));
+    }
+    return res;
+  };
+
+  if (isHtml(e.request, url)) {
+    e.respondWith(
+      fetch(e.request).then(store).catch(() =>
+        caches.match(e.request).then(cached => cached || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // 画像・アイコン・単語データは滅多に変わらないので、表示を待たせずキャッシュから返す。
   e.respondWith(
     caches.match(e.request).then(cached => {
-      const fetched = fetch(e.request).then(res => {
-        if (res && res.ok && res.type === 'basic') {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
-        }
-        return res;
-      }).catch(() => cached);
+      const fetched = fetch(e.request).then(store).catch(() => cached);
       return cached || fetched;
     })
   );
