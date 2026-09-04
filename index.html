@@ -1008,15 +1008,31 @@
     return q.some(t => c.some(w => sameWord(t, w)));
   }
 
+  // 感情や動作を表す語は、風景や物より人の表情・身振りが写っている方が
+  // 意味を掴みやすい。Pixabay の category と、写真の説明文での並べ替えに使う。
+  const EMOTION_JP = /(嬉し|喜[ぶび]|楽し|悲し|哀|怒|苛立|イライラ|不安|心配|怖|恐|驚|びっくり|恥ずかし|照れ|緊張|安心|落ち着|寂し|孤独|退屈|飽き|疲れ|感動|共感|同情|後悔|罪悪|嫉妬|羨|誇|自信|失望|がっかり|憂鬱|落ち込|興奮|わくわく|ドキドキ|好[きく]|嫌|愛|憎|感謝|申し訳|気が進|乗り気|ためら|躊躇|焦|悩|甘え|励ま|慰め|驚嘆)/;
+  const EMOTION_EN = /\b(happy|glad|joy|sad|angry|mad|upset|anxious|nervous|worried|afraid|scared|surprised|shocked|embarrassed|shy|relieved|calm|lonely|bored|tired|excited|proud|jealous|envious|grateful|regret|guilty|disappointed|depressed|frustrated|reluctant|eager|confident|confused|annoyed|delighted|ashamed)\b/i;
+  const HUMAN = /\b(person|people|man|men|woman|women|girl|boy|kid|kids|child|children|face|faces|smile|smiling|laugh|laughing|crying|hand|hands|gesture|portrait|couple|team|group|friends|worker|student|colleague|family)\b/i;
+
+  // null なら人物を優先しない（具体物はそのまま写真の方が分かりやすい）
+  function imageFocus(word, japanese) {
+    if (EMOTION_JP.test(String(japanese || '')) || EMOTION_EN.test(String(word || ''))) return 'feelings';
+    const kind = autoKind(word);
+    if (kind === 'sentence') return 'people'; // 会話文は人のやりとり
+    if (autoPos(word, japanese) === '動詞') return 'people'; // 動作は身振りで見せる
+    return null;
+  }
+
   // 「共感を呼ぶ」のような抽象語には写真が存在しない。Unsplash が空振りしたら
   // Pixabay のイラストを探す。日本語訳をそのまま投げられる（lang=ja）ので、
   // 英訳しづらい概念にはこちらの方が当たりやすい。
-  async function searchPixabay(query, lang) {
+  async function searchPixabay(query, lang, category) {
     const params = new URLSearchParams({
       key: pixabayKey, q: query, image_type: 'illustration',
       per_page: '20', safesearch: 'true', order: 'popular',
     });
     if (lang) params.set('lang', lang);
+    if (category) params.set('category', category);
     const res = await fetch(`https://pixabay.com/api/?${params.toString()}`);
     if (res.status === 429) return { status: 'rate' };
     if (res.status === 400 || res.status === 401) return { status: 'auth' };
@@ -1050,17 +1066,24 @@
     // 日本語訳 → 英語の内容語 の順。抽象語ほど日本語の方が当たる。
     const attempts = jpQueryCandidates(japanese).map(q => [q, 'ja']);
     for (const q of queryCandidates(word, japanese, 'en')) attempts.push([q, 'en']);
-    for (const [q, lang] of attempts.slice(0, 4)) {
-      const r = await searchPixabay(q, lang);
-      if (r.status !== 'ok') return { status: r.status };
-      const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p)) && !isRejected(rejected, p.webformatURL));
-      if (!usable.length) continue;
-      return {
-        status: 'ok', query: q, source: 'pixabay',
-        results: usable.map(p => ({
-          url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
-        })),
-      };
+    // 感情・動作の語は、まず人物カテゴリに絞って探す。見つからなければ絞らず探す。
+    const focus = imageFocus(word, japanese);
+    const passes = focus ? [focus, null] : [null];
+    let calls = 0;
+    for (const category of passes) {
+      for (const [q, lang] of attempts.slice(0, 3)) {
+        if (calls++ >= 5) break;
+        const r = await searchPixabay(q, lang, category);
+        if (r.status !== 'ok') return { status: r.status };
+        const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p)) && !isRejected(rejected, p.webformatURL));
+        if (!usable.length) continue;
+        return {
+          status: 'ok', query: q, source: 'pixabay',
+          results: usable.map(p => ({
+            url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
+          })),
+        };
+      }
     }
     return null;
   }
@@ -1077,6 +1100,10 @@
         && captionMatchesQuery(captionOf(p), query)
         && !isRejected(rejected, p.urls.regular));
       if (!usable.length) continue;
+      // 感情・動作の語なら、人が写っているものを先に見せる（除外はしない）
+      if (imageFocus(word, japanese)) {
+        usable.sort((a, b) => (HUMAN.test(captionOf(b)) ? 1 : 0) - (HUMAN.test(captionOf(a)) ? 1 : 0));
+      }
       return {
         status: 'ok', query, source: 'unsplash',
         results: usable.map(p => ({
