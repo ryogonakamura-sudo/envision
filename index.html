@@ -1094,12 +1094,15 @@
     const lang = imageLang;
     const key = cacheKey(word, lang);
     const entry = imageCache[key];
+    let fallback = null; // 再検索が API エラーで失敗したときに戻す先
     if (entry && entry.complete) {
       const fbAll = getFeedbackMap(word, lang);
       const alive = (entry.results || []).filter(r => fbAll[r.url] !== 'bad');
-      // 候補が残っていればキャッシュを使う。全部 ❌ を付けられていたら探し直す。
-      if (alive.length > 0) return { entry, status: 'ok' };
-      // 全部 ❌ が付いた場合はキャッシュを捨てて探し直す（下へ落とす）。
+      // 連想ヒットを弾く前に保存した写真は当てにならないので、一度だけ取り直す。
+      const unchecked = entry.source === 'unsplash' && !entry.filtered;
+      // 候補が残っていればキャッシュを使う。全部 ❌ なら探し直す。
+      if (alive.length > 0 && !unchecked) return { entry, status: 'ok' };
+      if (alive.length > 0) fallback = entry;
       if ((entry.results || []).length === 0) {
         // 見つからなかった結果もキャッシュする。毎回叩くと Unsplash の
         // 時間あたり上限（Demoキーは50回/時）をすぐ使い切ってしまうため。
@@ -1132,18 +1135,23 @@
           const hit = {
             results: r.results, idx: 0, complete: true,
             query: r.query, source: r.source, at: Date.now(),
-            triedPixabay: !!pixabayKey,
+            triedPixabay: !!pixabayKey, filtered: true,
           };
           remember(hit);
           return { entry: hit, status: 'ok' };
         }
         lastError = r; // 片方が落ちても、もう片方は試す
       }
-      if (lastError) return { entry: null, status: lastError.status, code: lastError.code };
+      // レート上限などで取り直せなかったときは、古い候補を出す（無画像より良い）
+      if (lastError) {
+        if (fallback) return { entry: fallback, status: 'ok' };
+        return { entry: null, status: lastError.status, code: lastError.code };
+      }
       remember({ results: [], idx: 0, complete: true, at: Date.now(), triedPixabay: !!pixabayKey });
       return { entry: null, status: 'empty' };
     } catch (e) {
       console.warn('画像取得に失敗', e);
+      if (fallback) return { entry: fallback, status: 'ok' };
       return { entry: null, status: 'network' };
     }
   }
