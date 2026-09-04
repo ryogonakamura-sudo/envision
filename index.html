@@ -52,14 +52,14 @@
   }
   .icon-btn:hover { background: var(--bg-elev); }
   .icon-btn:disabled { opacity: 0.35; cursor: default; }
-  .undo-btn {
+  .undo-btn, .text-btn {
     background: transparent; border: 1px solid var(--border); color: var(--text);
     height: 38px; padding: 0 12px; border-radius: 12px;
     display: flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap;
     transition: background .15s;
   }
-  .undo-btn:hover:not(:disabled) { background: var(--bg-elev); }
-  .undo-btn:disabled { opacity: 0.35; cursor: default; }
+  .undo-btn:hover:not(:disabled), .text-btn:hover:not(:disabled) { background: var(--bg-elev); }
+  .undo-btn:disabled, .text-btn:disabled { opacity: 0.35; cursor: default; }
 
   /* Cards & sections */
   .card {
@@ -476,7 +476,7 @@
     <!-- Quiz -->
     <main id="quiz" class="quiz hidden">
       <div class="progress">
-        <button class="icon-btn" id="btnBack" aria-label="ホームへ">←</button>
+        <button class="text-btn" id="btnBack" aria-label="学習を終了してホームへ">終了</button>
         <button class="undo-btn" id="btnUndo" aria-label="1つ前の単語に戻る" title="1つ前の単語に戻る" disabled><span aria-hidden="true">↶</span>1つ前</button>
         <div class="progress-bar"><div class="progress-fill" id="progFill"></div></div>
         <div id="progText">0 / 0</div>
