@@ -854,7 +854,8 @@
   const savePrefs = () => save(STORAGE.studyPrefs, prefs);
   const SORTS = [
     { key: 'random', label: '🔀 ランダム' },
-    { key: 'added', label: '📥 登録順' },
+    { key: 'added', label: '📥 登録順（古い順）' },
+    { key: 'added_desc', label: '📥 登録順（新しい順）' },
     { key: 'wrong', label: '❌ 間違いが多い順' },
     { key: 'unanswered', label: '🆕 未回答を先に' },
     { key: 'alpha', label: '🔤 A → Z' },
@@ -960,6 +961,7 @@
     const a = pool.slice();
     if (mode === 'random') return shuffle(a);
     if (mode === 'added') return a; // VOCAB は登録順に組み立てられている
+    if (mode === 'added_desc') return a.reverse();
     if (mode === 'wrong') {
       return a.sort((x, y) => getWrongCount(y.id) - getWrongCount(x.id)
         || lastAnsweredAt(y.id) - lastAnsweredAt(x.id));
