@@ -992,6 +992,17 @@
   function cacheKey(word, lang) { return `${lang}::${word}`; }
   const currentJapanese = (word) => (VOCAB.find(v => v.english === word) || {}).japanese || '';
 
+  // メモの「類似: discount / cut the price」は手で書いた英語の言い換え。訳から機械的に
+  // 作るクエリより遥かに当たるので、画像検索の2番目の手として使う。「値下げする」で
+  // 素材サイトを引くと外すが、discount なら値札やパーセント記号の写真が返る。
+  function synonymsOf(word) {
+    const v = VOCAB.find(x => x.english === word) || {};
+    const raw = v.synonyms || ((v.note || '').match(/類似[:：]([^|｜]*)/) || [])[1] || '';
+    return raw.split(/[\/／,、･・;；]+/).map(s => s.trim())
+      .filter(s => s && /[a-z]/i.test(s) && s.length <= 30)
+      .slice(0, 2);
+  }
+
   function extractPrimaryJp(jp) {
     if (!jp) return '';
     const cleaned = jp.replace(/[「」『』"'（）\(\)\[\]【】]/g, ' ');
@@ -1026,7 +1037,7 @@
 
   const NEG_CACHE_MS = 24 * 60 * 60 * 1000; // 見つからなかった単語を再試行するまでの間隔
   // 画像の絞り込み条件を変えたら上げる。古い条件で選んだ候補が残り続けないように。
-  const FILTER_VERSION = 2;
+  const FILTER_VERSION = 4;
 
   // 「見つからなかった」と「APIが応答しなかった」を必ず区別して返す。
   // 一緒くたにすると、レート制限やキー切れが "画像なし" に化けて原因が分からなくなる。
@@ -1082,9 +1093,13 @@
     if (n < 3) return false;
     return a.slice(0, n) === b.slice(0, n) && Math.abs(a.length - b.length) <= 4;
   }
-  function captionMatchesQuery(caption, query) {
-    const q = enWords(query).filter(t => !STOPWORDS.has(t));
-    if (!q.length) return true; // 判定材料がない（日本語クエリなど）ならAPIの結果に任せる
+  // 日本語で検索したときは query に英単語が無いので、代わりに見出しの英単語で照合する。
+  // ここを素通しにしていたせいで「印」が seal と訳され、アザラシの写真が10枚とも
+  // 連想ヒットのまま通っていた。検索は日本語、合否は英語、の二重で見る。
+  function captionMatchesQuery(caption, query, word) {
+    let q = enWords(query).filter(t => !STOPWORDS.has(t));
+    if (!q.length) q = enWords(word).filter(t => !STOPWORDS.has(t));
+    if (!q.length) return true; // 英語の手がかりが本当に無いならAPIの結果に任せる
     const c = enWords(caption);
     if (!c.length) return false; // 説明のない写真は合っているか確かめようがない
     return q.some(t => c.some(w => sameWord(t, w)));
@@ -1096,15 +1111,46 @@
   const EMOTION_EN = /\b(happy|glad|joy|sad|angry|mad|upset|anxious|nervous|worried|afraid|scared|surprised|shocked|embarrassed|shy|relieved|calm|lonely|bored|tired|excited|proud|jealous|envious|grateful|regret|guilty|disappointed|depressed|frustrated|reluctant|eager|confident|confused|annoyed|delighted|ashamed)\b/i;
   const HUMAN = /\b(person|people|man|men|woman|women|girl|boy|kid|kids|child|children|face|faces|smile|smiling|laugh|laughing|crying|hand|hands|gesture|portrait|couple|team|group|friends|worker|student|colleague|family)\b/i;
 
+  // 「やりにくさ」を表す形容詞には、それ自体を写した絵がない。tricky を絵で
+  // 探すとブルース・リーの水彩画が返ってきたが、あれを見て tricky は出てこない。
+  // 困っている人の表情なら一目で分かるので、感情語と同じ扱いにする。
+  const TROUBLE_JP = /(難し|むずかし|にくい|づらい|面倒|厄介|やっかい|ややこし|複雑|煩雑|大変|きつい|しんどい|苦労|困[るり難]|紛らわし|ぎこちな|不便|窮屈)/;
+  // 「丈夫な」の tough や「硬い」の hard のように、別の意味でも使う語は入れない。
+  const TROUBLE_EN = /\b(tricky|awkward|clumsy|difficult|troublesome|cumbersome|complicated|tedious|annoying|irritating|confusing|puzzling|stressful|exhausting|overwhelming)\b/i;
+
   // 「招待する」なら、招待状だけより渡している人が写っている方が動作まで伝わる。
   // 落とすと候補が尽きるので、除外はせず前に出すだけ。
   function preferHuman(list, metaOf) {
     return list.sort((a, b) => (HUMAN.test(metaOf(b)) ? 1 : 0) - (HUMAN.test(metaOf(a)) ? 1 : 0));
   }
 
+  // 英単語の内容語がいくつタグに出るかで並べ替える。日本語で検索した結果でも、
+  // タグは英語で返るので突き合わせられる。「ポイントカード」で引いたサイコロより、
+  // card を含む絵の方が前に来る。落とすと候補が尽きるので順番を変えるだけ。
+  function wordMatchScore(meta, word) {
+    const want = enWords(word).filter(t => !STOPWORDS.has(t));
+    if (!want.length) return 0;
+    const have = enWords(meta);
+    return want.filter(t => have.some(w => sameWord(t, w))).length;
+  }
+  function preferWordMatch(list, metaOf, word) {
+    return list.sort((a, b) => wordMatchScore(metaOf(b), word) - wordMatchScore(metaOf(a), word));
+  }
+
+  // 英語クエリなら、その語が全部タグに出ているかで当たり外れを判定できる。
+  // 「rewards card」で会員証の絵が出たら当たり、クリスマスカードは card しか
+  // 合わないので外れ。日本語クエリは照合しようがないので常に未確認扱いにする。
+  function queryConfirms(meta, query) {
+    const want = enWords(query).filter(t => !STOPWORDS.has(t));
+    if (!want.length) return false;
+    return wordMatchScore(meta, query) === want.length;
+  }
+
   // null なら人物を優先しない（具体物はそのまま写真の方が分かりやすい）
   function imageFocus(word, japanese) {
-    if (EMOTION_JP.test(String(japanese || '')) || EMOTION_EN.test(String(word || ''))) return 'feelings';
+    const jp = String(japanese || ''), en = String(word || '');
+    if (EMOTION_JP.test(jp) || EMOTION_EN.test(en)) return 'feelings';
+    if (TROUBLE_JP.test(jp) || TROUBLE_EN.test(en)) return 'feelings';
     const kind = autoKind(word);
     if (kind === 'sentence') return 'people'; // 会話文は人のやりとり
     if (autoPos(word, japanese) === '動詞') return 'people'; // 動作は身振りで見せる
@@ -1112,14 +1158,18 @@
   }
 
   // 「共感を呼ぶ」のような抽象語には写真が存在しない。Unsplash が空振りしたら
-  // Pixabay のイラストを探す。日本語訳をそのまま投げられる（lang=ja）ので、
-  // 英訳しづらい概念にはこちらの方が当たりやすい。
-  async function searchPixabay(query, lang, category) {
+  // Pixabay のイラストを探す。日本語訳をそのまま投げても拾ってくれる。
+  //
+  // lang は渡さない。Pixabay の lang は「返ってくるタグの言語」を変えるだけで、
+  // ヒットする画像は変わらない（q=犬 は lang=ja でも lang=en でも同じIDが返る）。
+  // 以前は lang=ja を送っていたため tags が日本語になり、TEXTY / DECOR / HUMAN の
+  // 英語正規表現が何にも当たらず、絞り込みが丸ごと効いていなかった。「ポイントカード」に
+  // thank you のレタリング画像が出たのはこれが原因（英語タグは text / writing / lettering）。
+  async function searchPixabay(query, category) {
     const params = new URLSearchParams({
       key: pixabayKey, q: query, image_type: 'illustration',
       per_page: '20', safesearch: 'true', order: 'popular',
     });
-    if (lang) params.set('lang', lang);
     if (category) params.set('category', category);
     const res = await fetch(`https://pixabay.com/api/?${params.toString()}`);
     if (res.status === 429) return { status: 'rate' };
@@ -1139,8 +1189,10 @@
       .replace(/\s+/g, ' ')
       .trim();
     if (!cleaned) return [];
+    // 先頭の助詞落としは、後ろに漢字・カタカナの内容語が続くときだけ。ひらがなが
+    // 続く場合は語の一部を削ってしまう（「やりにくい」が「りにくい」になっていた）。
     const first = (cleaned.split(/[、,，;；\/／\s]+/).filter(Boolean)[0] || cleaned)
-      .replace(/^[のをにへとがはでもや]+/, '');
+      .replace(/^[のをにへとがはでもや]+(?=[一-龠ァ-ヶ])/, '');
     if (!first) return [];
     const out = [first];
     // 日本語は漢字・カタカナの塊が名詞になりやすいので、2文字以上の最長の塊を拾う
@@ -1149,46 +1201,60 @@
     return [...new Set(out)].filter(Boolean);
   }
 
-  async function tryPixabayIllustration(word, japanese, rejected) {
+  async function tryPixabayIllustration(word, japanese, rejected, syn) {
     if (!pixabayKey) return null;
-    // 日本語訳 → 英語の内容語 の順。抽象語ほど日本語の方が当たる。
-    const attempts = jpQueryCandidates(japanese).map(q => [q, 'ja']);
-    for (const q of queryCandidates(word, japanese, 'en')) attempts.push([q, 'en']);
+    // 日本語訳 → 類似語 → 英語の内容語 の順。抽象語ほど日本語の方が当たるが、
+    // 外したときに類似語（membership card など）が効くことが多い。
+    const attempts = jpQueryCandidates(japanese)
+      .concat(syn || []).concat(queryCandidates(word, japanese, 'en'));
+    const vocab = [word].concat(syn || []).join(' ');
     // 感情・動作の語は、まず人物カテゴリに絞って探す。見つからなければ絞らず探す。
     const focus = imageFocus(word, japanese);
     const passes = focus ? [focus, null] : [null];
+    const pack = (q, list) => ({
+      status: 'ok', query: q, source: 'pixabay',
+      results: list.map(p => ({
+        url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
+      })),
+    });
+    // Pixabay は何を投げても結果を返す。「ポイントカード」でサイコロ、「やりにくい」で
+    // 園芸イラストが並ぶ。空にならないので、以前は最初の日本語クエリで必ず打ち切られ、
+    // 類似語や英単語に一度も進めなかった。英語クエリの語がタグに出たときだけ「当たり」と
+    // 見なし、日本語クエリの結果は他が全滅したときの保険として取っておく。
+    let fallback = null;
     let calls = 0;
     for (const category of passes) {
-      for (const [q, lang] of attempts.slice(0, 3)) {
+      for (const q of [...new Set(attempts)].slice(0, 4)) {
         if (calls++ >= 5) break;
-        const r = await searchPixabay(q, lang, category);
+        const r = await searchPixabay(q, category);
         if (r.status !== 'ok') return { status: r.status };
         const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p))
           && !isDecorImage(pixabayMeta(p))
           && !isRejected(rejected, p.webformatURL));
         if (!usable.length) continue;
+        preferWordMatch(usable, pixabayMeta, vocab);
         if (focus) preferHuman(usable, pixabayMeta);
-        return {
-          status: 'ok', query: q, source: 'pixabay',
-          results: usable.map(p => ({
-            url: p.webformatURL, credit: p.user, creditUrl: p.pageURL, source: 'pixabay',
-          })),
-        };
+        const hit = usable.filter(p => queryConfirms(pixabayMeta(p), q));
+        if (hit.length) return pack(q, hit);
+        if (!fallback) fallback = pack(q, usable);
       }
     }
-    return null;
+    return fallback;
   }
 
-  async function tryUnsplashPhoto(word, japanese, lang, rejected) {
+  async function tryUnsplashPhoto(word, japanese, lang, rejected, syn) {
     if (!apiKey) return null;
-    for (const query of queryCandidates(word, japanese, lang)) {
+    const vocab = [word].concat(syn || []).join(' ');
+    // 日本語で引いて全部落ちたときの2番目の手。「値下げする」は Unsplash が
+    // 値札やドル札を返してくれるが、英語の手がかりが無いと合否を判定できない。
+    for (const query of queryCandidates(word, japanese, lang).concat(syn || [])) {
       const r = await searchUnsplash(query, lang);
       if (r.status !== 'ok') return { status: r.status, code: r.code };
       // 本のページや看板など、文字が写っているだけの写真は意味の手がかりにならない。
       // 検索語が写真の説明に出てこないもの（連想ヒット）も同様に落とす。
       const usable = r.photos.filter(p =>
         !isTextImage(unsplashMeta(p))
-        && captionMatchesQuery(captionOf(p), query)
+        && captionMatchesQuery(captionOf(p), query, vocab)
         && !isRejected(rejected, p.urls.regular));
       if (!usable.length) continue;
       // 感情・動作の語なら、人が写っているものを先に見せる（除外はしない）
@@ -1240,9 +1306,10 @@
     // ❌ を付けた画像は取り直しでも除外する。同じ候補が返ってきて堂々巡りになるため。
     const rejected = new Set(
       Object.entries(getFeedbackMap(word, lang)).filter(([, v]) => v === 'bad').map(([u]) => u));
+    const syn = synonymsOf(word);
     const sources = illustFirst
-      ? [() => tryPixabayIllustration(word, japanese, rejected), () => tryUnsplashPhoto(word, japanese, lang, rejected)]
-      : [() => tryUnsplashPhoto(word, japanese, lang, rejected), () => tryPixabayIllustration(word, japanese, rejected)];
+      ? [() => tryPixabayIllustration(word, japanese, rejected, syn), () => tryUnsplashPhoto(word, japanese, lang, rejected, syn)]
+      : [() => tryUnsplashPhoto(word, japanese, lang, rejected, syn), () => tryPixabayIllustration(word, japanese, rejected, syn)];
     try {
       let lastError = null;
       for (const run of sources) {
