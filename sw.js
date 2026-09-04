@@ -1,5 +1,5 @@
 /* enVision service worker — network-first HTML, cache-first assets */
-const CACHE = 'envision-v14';
+const CACHE = 'envision-v15';
 const SHELL = [
   './',
   './index.html',

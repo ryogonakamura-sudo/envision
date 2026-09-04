@@ -1963,6 +1963,8 @@
   }
 
   function closeWordModal() {
+    // 入力欄にフォーカスが残ったままだとキーボード操作が効かなくなる
+    if ($('wordModal').contains(document.activeElement)) document.activeElement.blur();
     $('wordModal').classList.remove('open');
     editingId = null;
   }
@@ -2299,6 +2301,7 @@
       if (data.imageCache) { imageCache = data.imageCache; save(STORAGE.imageCache, imageCache); }
       if (data.imageFeedback) { imageFeedback = data.imageFeedback; save(STORAGE.imageFeedback, imageFeedback); }
       if (typeof data.round === 'number') { round = data.round; save(STORAGE.round, round); }
+      if (typeof data.studyTime === 'number') { studyTime = data.studyTime; unsavedTime = 0; save(STORAGE.studyTime, studyTime); }
       if (data.userOverrides) { userOverrides = data.userOverrides; save(STORAGE.userOverrides, userOverrides); }
       if (Array.isArray(data.userWords)) { userWords = data.userWords; save(STORAGE.userWords, userWords); }
       if (data.wordMeta) { wordMeta = data.wordMeta; save(STORAGE.wordMeta, wordMeta); }
@@ -2316,8 +2319,17 @@
   });
 
   // Keyboard shortcuts
+  // 入力欄やモーダルを開いているときは、打った文字が回答の操作になってしまわないようにする
+  function isTyping(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
+  }
+
   document.addEventListener('keydown', (e) => {
     if ($('quiz').classList.contains('hidden')) return;
+    if (isTyping(e.target)) return;
+    if (document.querySelector('.modal-back.open')) return;
     if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); reveal(); }
     if (e.key === 'ArrowRight' || e.key.toLowerCase() === 'o') { if (revealed) answer('ok'); }
     if (e.key === 'ArrowLeft' || e.key.toLowerCase() === 'x') { if (revealed) answer('ng'); }
@@ -2335,11 +2347,11 @@
 
   // 同期対象の中身が本当に食い違ったときだけ確認を出したい。そのために
   // 「前回同期した時点の内容」を指紋として持っておき、どちら側が変わったかを見る。
-  const SYNC_FIELDS = ['progress', 'userOverrides', 'userWords', 'round', 'wordMeta',
+  const SYNC_FIELDS = ['progress', 'userOverrides', 'userWords', 'round', 'studyTime', 'wordMeta',
     'autoSpeak', 'voiceName', 'speechRate', 'imageLang', 'imageFeedback'];
 
   function localSyncData() {
-    return { progress, userOverrides, userWords, round, wordMeta,
+    return { progress, userOverrides, userWords, round, studyTime, wordMeta,
       autoSpeak, voiceName, speechRate, imageLang, imageFeedback };
   }
 
@@ -2378,7 +2390,7 @@
     try {
       const docRef = firebaseDb.collection('users').doc(currentUser.uid);
       await docRef.set({
-        progress, userOverrides, userWords, round, wordMeta,
+        progress, userOverrides, userWords, round, studyTime, wordMeta,
         autoSpeak, voiceName, speechRate, imageLang, imageFeedback,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       }, { merge: false });
@@ -2403,6 +2415,7 @@
     if (Array.isArray(data.userWords)) { userWords = data.userWords; localStorage.setItem(STORAGE.userWords, JSON.stringify(userWords)); }
     if (data.wordMeta) { wordMeta = data.wordMeta; localStorage.setItem(STORAGE.wordMeta, JSON.stringify(wordMeta)); }
     if (typeof data.round === 'number') { round = data.round; localStorage.setItem(STORAGE.round, JSON.stringify(round)); }
+    if (typeof data.studyTime === 'number') { studyTime = data.studyTime; unsavedTime = 0; localStorage.setItem(STORAGE.studyTime, JSON.stringify(studyTime)); }
     if (typeof data.autoSpeak === 'boolean') { autoSpeak = data.autoSpeak; localStorage.setItem(STORAGE.autoSpeak, JSON.stringify(autoSpeak)); }
     if (data.voiceName) { voiceName = data.voiceName; localStorage.setItem(STORAGE.voiceName, JSON.stringify(voiceName)); }
     if (typeof data.speechRate === 'number') { speechRate = data.speechRate; localStorage.setItem(STORAGE.speechRate, JSON.stringify(speechRate)); }
