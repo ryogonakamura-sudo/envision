@@ -701,6 +701,7 @@
     userOverrides: 'vocabApp.userOverrides', // { [baseId]: { english?, japanese?, note?, deleted? } }
     userWords: 'vocabApp.userWords', // [{ id, english, japanese, note }]
     pixabayKey: 'vocabApp.pixabayKey', // 抽象語のイラスト取得用（任意）
+    lastSyncFp: 'vocabApp.lastSyncFp', // 前回クラウドと一致した時点の内容の指紋
     wordMeta: 'vocabApp.wordMeta', // { [id]: { kind?, pos?, scene? } } 手動で上書きした分類のみ
     studyPrefs: 'vocabApp.studyPrefs', // { kind, pos, scene, sort }
   };
@@ -984,6 +985,28 @@
     [p.alt_description, p.description, ...(p.tags || []).map(t => t.title || t)].filter(Boolean).join(' ');
   const pixabayMeta = (p) => p.tags || '';
 
+  // Unsplash は「連想」でも写真を返す。passive で並ぶ札束は passive income の
+  // 連想であって passive の意味ではない。alt_description は写っているものを
+  // 説明した自動キャプションなので、そこに検索語が出ない写真は連想ヒットとみなす。
+  // tags は "passive income" のような集客キーワードが混ざるため判定には使わない。
+  const captionOf = (p) => [p.alt_description, p.description].filter(Boolean).join(' ');
+  const isRejected = (rejected, url) => !!(rejected && rejected.has(url));
+  const enWords = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(Boolean);
+  // 語形変化を吸収する簡易一致（passive/passively, abandon/abandoned）
+  function sameWord(a, b) {
+    if (a === b) return true;
+    const n = Math.min(a.length, b.length);
+    if (n < 3) return false;
+    return a.slice(0, n) === b.slice(0, n) && Math.abs(a.length - b.length) <= 4;
+  }
+  function captionMatchesQuery(caption, query) {
+    const q = enWords(query).filter(t => !STOPWORDS.has(t));
+    if (!q.length) return true; // 判定材料がない（日本語クエリなど）ならAPIの結果に任せる
+    const c = enWords(caption);
+    if (!c.length) return false; // 説明のない写真は合っているか確かめようがない
+    return q.some(t => c.some(w => sameWord(t, w)));
+  }
+
   // 「共感を呼ぶ」のような抽象語には写真が存在しない。Unsplash が空振りしたら
   // Pixabay のイラストを探す。日本語訳をそのまま投げられる（lang=ja）ので、
   // 英訳しづらい概念にはこちらの方が当たりやすい。
@@ -1021,7 +1044,7 @@
     return [...new Set(out)].filter(Boolean);
   }
 
-  async function tryPixabayIllustration(word, japanese) {
+  async function tryPixabayIllustration(word, japanese, rejected) {
     if (!pixabayKey) return null;
     // 日本語訳 → 英語の内容語 の順。抽象語ほど日本語の方が当たる。
     const attempts = jpQueryCandidates(japanese).map(q => [q, 'ja']);
@@ -1029,7 +1052,7 @@
     for (const [q, lang] of attempts.slice(0, 4)) {
       const r = await searchPixabay(q, lang);
       if (r.status !== 'ok') return { status: r.status };
-      const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p)));
+      const usable = r.photos.filter(p => !isTextImage(pixabayMeta(p)) && !isRejected(rejected, p.webformatURL));
       if (!usable.length) continue;
       return {
         status: 'ok', query: q, source: 'pixabay',
@@ -1041,13 +1064,17 @@
     return null;
   }
 
-  async function tryUnsplashPhoto(word, japanese, lang) {
+  async function tryUnsplashPhoto(word, japanese, lang, rejected) {
     if (!apiKey) return null;
     for (const query of queryCandidates(word, japanese, lang)) {
       const r = await searchUnsplash(query, lang);
       if (r.status !== 'ok') return { status: r.status, code: r.code };
-      // 本のページや看板など、文字が写っているだけの写真は意味の手がかりにならない
-      const usable = r.photos.filter(p => !isTextImage(unsplashMeta(p)));
+      // 本のページや看板など、文字が写っているだけの写真は意味の手がかりにならない。
+      // 検索語が写真の説明に出てこないもの（連想ヒット）も同様に落とす。
+      const usable = r.photos.filter(p =>
+        !isTextImage(unsplashMeta(p))
+        && captionMatchesQuery(captionOf(p), query)
+        && !isRejected(rejected, p.urls.regular));
       if (!usable.length) continue;
       return {
         status: 'ok', query, source: 'unsplash',
@@ -1056,6 +1083,7 @@
           credit: p.user.name,
           creditUrl: p.user.links.html + '?utm_source=enVision&utm_medium=referral',
           source: 'unsplash',
+          alt: (p.alt_description || '').slice(0, 120),
         })),
       };
     }
@@ -1067,13 +1095,19 @@
     const key = cacheKey(word, lang);
     const entry = imageCache[key];
     if (entry && entry.complete) {
-      if ((entry.results || []).length > 0) return { entry, status: 'ok' };
-      // 見つからなかった結果もキャッシュする。毎回叩くと Unsplash の
-      // 時間あたり上限（Demoキーは50回/時）をすぐ使い切ってしまうため。
-      // Pixabayキーを後から足した場合は探し直せるよう、鍵の有無も見る。
-      const staleNeg = Date.now() - (entry.at || 0) >= NEG_CACHE_MS;
-      const canTryIllust = pixabayKey && !entry.triedPixabay;
-      if (!staleNeg && !canTryIllust) return { entry: null, status: 'empty' };
+      const fbAll = getFeedbackMap(word, lang);
+      const alive = (entry.results || []).filter(r => fbAll[r.url] !== 'bad');
+      // 候補が残っていればキャッシュを使う。全部 ❌ を付けられていたら探し直す。
+      if (alive.length > 0) return { entry, status: 'ok' };
+      // 全部 ❌ が付いた場合はキャッシュを捨てて探し直す（下へ落とす）。
+      if ((entry.results || []).length === 0) {
+        // 見つからなかった結果もキャッシュする。毎回叩くと Unsplash の
+        // 時間あたり上限（Demoキーは50回/時）をすぐ使い切ってしまうため。
+        // Pixabayキーを後から足した場合は探し直せるよう、鍵の有無も見る。
+        const staleNeg = Date.now() - (entry.at || 0) >= NEG_CACHE_MS;
+        const canTryIllust = pixabayKey && !entry.triedPixabay;
+        if (!staleNeg && !canTryIllust) return { entry: null, status: 'empty' };
+      }
     }
     if (!apiKey && !pixabayKey) return { entry: entry || null, status: 'nokey' };
     const remember = (hit) => {
@@ -1083,9 +1117,12 @@
     // 単語は実物の写真が分かりやすいが、熟語・文のような抽象的な表現は
     // 動作や表情を描いたイラストの方が意味に近い。種別で探す順番を変える。
     const illustFirst = autoKind(word) !== 'word';
+    // ❌ を付けた画像は取り直しでも除外する。同じ候補が返ってきて堂々巡りになるため。
+    const rejected = new Set(
+      Object.entries(getFeedbackMap(word, lang)).filter(([, v]) => v === 'bad').map(([u]) => u));
     const sources = illustFirst
-      ? [() => tryPixabayIllustration(word, japanese), () => tryUnsplashPhoto(word, japanese, lang)]
-      : [() => tryUnsplashPhoto(word, japanese, lang), () => tryPixabayIllustration(word, japanese)];
+      ? [() => tryPixabayIllustration(word, japanese, rejected), () => tryUnsplashPhoto(word, japanese, lang, rejected)]
+      : [() => tryUnsplashPhoto(word, japanese, lang, rejected), () => tryPixabayIllustration(word, japanese, rejected)];
     try {
       let lastError = null;
       for (const run of sources) {
@@ -1464,9 +1501,18 @@
     badBtn.className = 'fb-btn fb-bad' + (curState === 'bad' ? ' active' : '');
     badBtn.title = 'この画像は合っていない（次の画像へ）';
     badBtn.textContent = '❌';
-    badBtn.addEventListener('click', (e) => {
+    badBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const next = markImageBad(word);
+      const fb2 = getFeedbackMap(word, imageLang);
+      const allBad = (next?.results || []).every(r => fb2[r.url] === 'bad');
+      // 候補を全部 ❌ にしたら、そこで詰まらせず別の検索語・別サイトで取り直す。
+      if (allBad) {
+        area.innerHTML = '<div class="image-loading">別の画像を探しています…</div>';
+        const r = await ensureImageCandidates(word, currentJapanese(word));
+        paintImage(area, word, r.entry, r.status);
+        return;
+      }
       if (next) paintImage(area, word, next);
     });
     fbBox.appendChild(goodBtn);
@@ -2113,6 +2159,34 @@
     if (el) el.textContent = text;
   }
 
+  // 同期対象の中身が本当に食い違ったときだけ確認を出したい。そのために
+  // 「前回同期した時点の内容」を指紋として持っておき、どちら側が変わったかを見る。
+  const SYNC_FIELDS = ['progress', 'userOverrides', 'userWords', 'round', 'wordMeta',
+    'autoSpeak', 'voiceName', 'speechRate', 'imageLang', 'imageFeedback'];
+
+  function localSyncData() {
+    return { progress, userOverrides, userWords, round, wordMeta,
+      autoSpeak, voiceName, speechRate, imageLang, imageFeedback };
+  }
+
+  function stableStringify(v) {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+    if (Array.isArray(v)) return '[' + v.map(stableStringify).join(',') + ']';
+    return '{' + Object.keys(v).sort()
+      .map(k => JSON.stringify(k) + ':' + stableStringify(v[k])).join(',') + '}';
+  }
+
+  function fingerprint(obj) {
+    const picked = {};
+    for (const k of SYNC_FIELDS) if (obj && obj[k] !== undefined) picked[k] = obj[k];
+    const s = stableStringify(picked);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return s.length + '-' + h.toString(16);
+  }
+
+  const rememberSynced = () => save(STORAGE.lastSyncFp, fingerprint(localSyncData()));
+
   function scheduleCloudSync() {
     if (!currentUser || !firebaseDb) return;
     if (syncTimer) clearTimeout(syncTimer);
@@ -2134,6 +2208,7 @@
         autoSpeak, voiceName, speechRate, imageLang, imageFeedback,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       }, { merge: false });
+      rememberSynced();
       setSyncStatus('✓ 同期済 ' + new Date().toLocaleTimeString('ja-JP'));
     } finally {
       syncing = false;
@@ -2176,16 +2251,34 @@
     setSyncStatus('クラウドからデータを取得中…');
     try {
       const cloud = await pullFromCloud();
-      if (cloud) {
-        if (hasLocalData() && confirm('クラウドにデータがあります。\n「OK」: クラウドのデータで上書き\n「キャンセル」: ローカルのデータでクラウドを上書き')) {
+      if (!cloud) {
+        await pushToCloud();
+      } else if (!hasLocalData()) {
+        applyCloudData(cloud);
+        rememberSynced();
+      } else {
+        const localFp = fingerprint(localSyncData());
+        const cloudFp = fingerprint(cloud);
+        const lastFp = load(STORAGE.lastSyncFp, '');
+        if (localFp === cloudFp) {
+          rememberSynced(); // 中身が同じなら何も聞かない
+        } else if (lastFp && cloudFp === lastFp) {
+          await pushToCloud(); // この端末だけ進んでいる
+        } else if (lastFp && localFp === lastFp) {
+          applyCloudData(cloud); // 別の端末で進んでいる
+          rememberSynced();
+        } else if (confirm(
+          '同期の確認\n\n'
+          + 'この端末と、他の端末での学習内容が食い違っています。\n'
+          + 'どちらを残しますか？\n\n'
+          + `「OK」: クラウド側を採用（単語 ${(cloud.userWords || []).length} 件 / 回答 ${Object.keys(cloud.progress || {}).length} 件）\n`
+          + `「キャンセル」: この端末を採用（単語 ${userWords.length} 件 / 回答 ${Object.keys(progress).length} 件）`
+        )) {
           applyCloudData(cloud);
-        } else if (!hasLocalData()) {
-          applyCloudData(cloud);
+          rememberSynced();
         } else {
           await pushToCloud();
         }
-      } else {
-        await pushToCloud();
       }
       renderHome();
       if (!$('list').classList.contains('hidden')) renderList();
