@@ -560,6 +560,11 @@
         <div class="label" style="margin-bottom:6px;">メモ（任意）</div>
         <textarea id="wordNote" rows="3" placeholder="自分の連想・覚え方など" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit; resize:vertical;"></textarea>
       </div>
+      <div>
+        <div class="label" style="margin-bottom:6px;">画像URL（任意）</div>
+        <input id="wordImage" type="url" placeholder="https://… 検索で出てこない語はここに貼る" style="width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:10px; font-size:14px; font-family:inherit;">
+        <div class="muted" style="font-size:11px; padding-top:4px;">指定すると検索より優先されます。画像を右クリック →「画像アドレスをコピー」で貼れます。</div>
+      </div>
       <div class="row" style="gap:10px; align-items:flex-start;">
         <div style="flex:1; min-width:0;">
           <div class="label" style="margin-bottom:6px;">種別</div>
@@ -678,7 +683,7 @@
         <button class="secondary" id="btnCsvImport" style="flex:1;">📄 CSVから単語を一括追加</button>
         <input type="file" id="csvFile" accept=".csv,text/csv" style="display:none;">
       </div>
-      <div class="muted" style="font-size:11px;">CSVのヘッダ例: <code>English,日本語訳,例文,類義語,メモ</code> や <code>word,translation,example,synonym,note</code> を自動認識（例文以降は任意）</div>
+      <div class="muted" style="font-size:11px;">CSVのヘッダ例: <code>English,日本語訳,例文,類義語,メモ,画像URL</code> や <code>word,translation,example,synonym,note,image</code> を自動認識（例文以降は任意）</div>
 
       <div style="padding-top:12px; border-top:1px solid var(--border);" class="stack">
         <div class="label">進捗</div>
@@ -995,6 +1000,19 @@
   // メモの「類似: discount / cut the price」は手で書いた英語の言い換え。訳から機械的に
   // 作るクエリより遥かに当たるので、画像検索の2番目の手として使う。「値下げする」で
   // 素材サイトを引くと外すが、discount なら値札やパーセント記号の写真が返る。
+  // 手で選んだ画像。抽象的な語ほど検索では当てられない（tricky に葉脈のマクロが
+  // 返るなど）ので、自分で見つけた1枚を指定できる逃げ道を用意する。編集画面の
+  // 画像URL欄のほか、メモに「画像: https://…」と書いても拾う（Notion側で書けるように）。
+  function imageOverrideOf(word) {
+    const v = VOCAB.find(x => x.english === word) || {};
+    if (v.image) return String(v.image).trim();
+    const note = v.note || '';
+    const tagged = note.match(/(?:画像|image)\s*[:：]\s*(https?:\/\/[^\s"'<>]+)/i);
+    if (tagged) return tagged[1];
+    const bare = note.match(/https?:\/\/[^\s"'<>]+\.(?:jpe?g|png|gif|webp|avif)(?:\?[^\s"'<>]*)?/i);
+    return bare ? bare[0] : '';
+  }
+
   function synonymsOf(word) {
     const v = VOCAB.find(x => x.english === word) || {};
     const raw = v.synonyms || ((v.note || '').match(/類似[:：]([^|｜]*)/) || [])[1] || '';
@@ -1274,6 +1292,11 @@
   }
 
   async function ensureImageCandidates(word, japanese) {
+    // 手で指定した画像が最優先。検索もキャッシュも通さない（指定を消すまで必ずこれ）。
+    const manual = imageOverrideOf(word);
+    if (manual) {
+      return { status: 'ok', entry: { results: [{ url: manual, source: 'manual' }], idx: 0, complete: true } };
+    }
     const lang = imageLang;
     const key = cacheKey(word, lang);
     const entry = imageCache[key];
@@ -1680,28 +1703,46 @@
       }
       return;
     }
+    const img = entry.results[entry.idx];
+    const manual = img && img.source === 'manual';
     // どの経路で来ても ❌ の画像は描かない。キャッシュを返したときなど、
     // idx が ❌ の位置を指したままのことがあるため、描く直前に必ず確かめる。
+    // 手で指定した画像は対象外。過去に同じURLを ❌ にしていると、探し直しても
+    // また同じ1枚が返ってきて堂々巡りになるため。
     const fbNow = getFeedbackMap(word, imageLang);
-    if (entry.results[entry.idx] && fbNow[entry.results[entry.idx].url] === 'bad') {
+    if (!manual && img && fbNow[img.url] === 'bad') {
       const next = cycleImage(word);
       if (next) paintImage(area, word, next, status);
       else nextAfterReject(area, word);
       return;
     }
 
-    const img = entry.results[entry.idx];
     area.innerHTML = '';
     const el = document.createElement('img');
     el.src = img.url;
     el.alt = word;
     el.loading = 'eager';
-    // 読み込めない画像（URLの失効など）は壊れたまま出し続けず、❌ と同じ扱いで外す
+    // 読み込めない画像（URLの失効など）は壊れたまま出し続けず、❌ と同じ扱いで外す。
+    // 手で指定したURLは黙って捨てず、直せるように理由を出す。
     el.addEventListener('error', () => {
+      if (manual) {
+        area.innerHTML = '<div class="image-placeholder"><div>指定した画像URLを読み込めませんでした'
+          + '<span class="sub">✏️ から貼り直してください。直リンクを禁止しているサイトもあります</span></div></div>';
+        return;
+      }
       setFeedback(word, imageLang, img.url, 'bad');
       nextAfterReject(area, word);
     }, { once: true });
     area.appendChild(el);
+
+    // 手で選んだ1枚に ⭕️/❌/🔄 は要らない。指定中だと分かる印だけ出す。
+    if (manual) {
+      const tag = document.createElement('div');
+      tag.className = 'image-credit';
+      tag.textContent = '🖼️ 指定した画像';
+      area.appendChild(tag);
+      return;
+    }
 
     const fbMap = getFeedbackMap(word, imageLang);
     const curState = fbMap[img.url] || null;
@@ -1957,6 +1998,7 @@
     const noteIdx = findColumn(headers, ['メモ', 'note', 'memo', 'comment']);
     const exIdx = findColumn(headers, ['例文', 'example', 'sentence', 'ex']);
     const synIdx = findColumn(headers, ['類義語', '似た意味', '同義語', 'synonym', 'similar']);
+    const imgIdx = findColumn(headers, ['画像', '画像URL', 'image', 'image_url', 'picture']);
     if (enIdx < 0 || jaIdx < 0) {
       alert('「英単語」と「日本語訳」に相当する列が見つかりません。\nヘッダ行を確認してください。\n見つかった列: ' + headers.join(', '));
       return;
@@ -1970,10 +2012,11 @@
       const note = noteIdx >= 0 ? (r[noteIdx] || '').trim() : '';
       const example = exIdx >= 0 ? (r[exIdx] || '').trim() : '';
       const synonyms = synIdx >= 0 ? (r[synIdx] || '').trim() : '';
+      const image = imgIdx >= 0 ? (r[imgIdx] || '').trim() : '';
       if (!en || !ja) { skipped++; continue; }
       if (existingEn.has(en.toLowerCase())) { skipped++; continue; }
       const id = 'u_' + Date.now().toString(36) + '_' + i.toString(36) + Math.random().toString(36).slice(2, 5);
-      userWords.push({ id, english: en, japanese: ja, note, example, synonyms,
+      userWords.push({ id, english: en, japanese: ja, note, example, synonyms, image,
         notionCheck1: false, notionCheck2: false, notionCheck3: false });
       existingEn.add(en.toLowerCase());
       added++;
@@ -2009,6 +2052,7 @@
       $('wordExample').value = w.example || '';
       $('wordSynonyms').value = w.synonyms || '';
       $('wordNote').value = w.note || '';
+      $('wordImage').value = w.image || '';
       // 「自動」に、いま自動判定されている値を表示する
       const ak = autoKind(w.english);
       $('wordKind').options[0].textContent = `自動（${kindLabel(ak)}）`;
@@ -2023,6 +2067,7 @@
       $('wordExample').value = '';
       $('wordSynonyms').value = '';
       $('wordNote').value = '';
+      $('wordImage').value = '';
       $('wordKind').options[0].textContent = '自動';
       $('wordPos').options[0].textContent = '自動';
       $('btnWordDelete').style.display = 'none';
@@ -2048,26 +2093,28 @@
     const note = $('wordNote').value.trim();
     const example = $('wordExample').value.trim();
     const synonyms = $('wordSynonyms').value.trim();
+    const image = $('wordImage').value.trim();
     if (!en || !ja) { alert('英単語と日本語訳は必須です'); return; }
+    if (image && !/^https?:\/\//i.test(image)) { alert('画像URLは http:// か https:// で始めてください'); return; }
     let savedId = editingId;
     if (editingId) {
       if (editingId.startsWith('u_')) {
         const idx = userWords.findIndex(u => u.id === editingId);
         if (idx >= 0) {
-          userWords[idx] = { ...userWords[idx], english: en, japanese: ja, note, example, synonyms };
+          userWords[idx] = { ...userWords[idx], english: en, japanese: ja, note, example, synonyms, image };
           save(STORAGE.userWords, userWords);
         }
       } else {
         userOverrides[editingId] = {
           ...(userOverrides[editingId] || {}),
-          english: en, japanese: ja, note, example, synonyms,
+          english: en, japanese: ja, note, example, synonyms, image,
           deleted: false,
         };
         save(STORAGE.userOverrides, userOverrides);
       }
     } else {
       const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-      userWords.push({ id, english: en, japanese: ja, note, example, synonyms,
+      userWords.push({ id, english: en, japanese: ja, note, example, synonyms, image,
         notionCheck1: false, notionCheck2: false, notionCheck3: false });
       save(STORAGE.userWords, userWords);
       savedId = id;
